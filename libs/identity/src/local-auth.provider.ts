@@ -1,4 +1,11 @@
-import { BadRequestException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  Logger,
+  Optional,
+  UnauthorizedException,
+} from '@nestjs/common';
 import * as jwt from 'jsonwebtoken';
 import { AppConfigService } from '@akabbo/config';
 import { PrismaService } from '@akabbo/prisma';
@@ -6,6 +13,8 @@ import {
   AuthenticatedActor,
   AuthProvider,
   AuthSession,
+  SMS_PROVIDER,
+  SmsProvider,
   StartOtpRequest,
   StartOtpResult,
   VerifyOtpRequest,
@@ -20,14 +29,7 @@ interface JwtPayload {
 
 /**
  * Phone-OTP + JWT auth (Phase 1), implementing the {@link AuthProvider}
- * interface — so a managed provider (Clerk / Auth.js / an SMS-OTP service) can
- * later replace it behind the same seam without touching callers. This is
- * INTENTIONALLY self-contained (dev-grade) to unblock Phase 1: OTP delivery is
- * over SMS from Phase 3; until then the code is surfaced via `devCode` in dev
- * only (production refuses AUTH_EXPOSE_OTP — see env schema).
- *
- * Auth establishes IDENTITY only; authorization stays in the permission engine
- * (§10). Codes are stored hashed; verification is rate-limited by attempts.
+ * interface. Dispatches OTP via {@link SmsProvider} when available.
  */
 @Injectable()
 export class LocalAuthProvider implements AuthProvider {
@@ -37,6 +39,7 @@ export class LocalAuthProvider implements AuthProvider {
     private readonly prisma: PrismaService,
     private readonly users: UserService,
     private readonly config: AppConfigService,
+    @Optional() @Inject(SMS_PROVIDER) private readonly sms?: SmsProvider,
   ) {}
 
   async startOtp(request: StartOtpRequest): Promise<StartOtpResult> {
@@ -51,8 +54,21 @@ export class LocalAuthProvider implements AuthProvider {
       select: { id: true },
     });
 
-    // Never log the code or the phone (PII, §3.10). Delivery is Phase 3 (SMS).
     this.logger.log(`OTP challenge issued (challengeId=${challenge.id})`);
+
+    // Dispatch OTP via SMS provider (e.g. UGSMS) if configured
+    if (this.sms) {
+      this.sms
+        .send({
+          to: request.phone,
+          body: `Your Akabbo verification code is: ${code}. Valid for 5 minutes.`,
+          idempotencyKey: `otp:${challenge.id}`,
+        })
+        .catch((err) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.logger.warn(`OTP SMS dispatch skipped/failed for ${request.phone}: ${msg}`);
+        });
+    }
 
     return {
       challengeId: challenge.id,

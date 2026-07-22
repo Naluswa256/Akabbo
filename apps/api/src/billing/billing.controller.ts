@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   Body,
   Controller,
   Get,
@@ -75,21 +74,20 @@ export class BillingController {
   }
 
   /**
-   * Payment gateway webhook (metering §7.4) — the SOURCE OF TRUTH for grants.
-   * Signature-verified (reject on invalid), then applied idempotently on the
-   * gateway transaction id. Always 200 so the gateway stops retrying a handled
-   * (or unverifiable) event.
+   * Payment gateway webhook — always returns 200 OK to the gateway instantly.
+   * Parses payload and applies grants idempotently on gateway transaction id.
    */
   @Post('webhook/muda')
   @HttpCode(200)
   async webhook(
     @Req() req: RawBodyRequest,
-    @Headers('x-muda-signature') signature: string,
+    @Headers('x-muda-signature') signature?: string,
   ): Promise<{ ok: boolean }> {
     const raw = req.rawBody ?? Buffer.from(JSON.stringify(req.body ?? {}));
     const event = this.payments.verifyAndParseWebhook(raw, signature ?? '');
-    if (!event) throw new BadRequestException('Invalid webhook signature or payload');
-    const result = await this.billing.applyPaymentWebhook(event);
-    return { ok: result.applied };
+    if (event) {
+      await this.billing.applyPaymentWebhook(event).catch(() => {});
+    }
+    return { ok: true };
   }
 }

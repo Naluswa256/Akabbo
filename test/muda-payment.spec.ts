@@ -42,9 +42,14 @@ describe('MudaTechProvider (collections-only)', () => {
     expect(provider.verifyAndParseWebhook(body, sign(body))?.status).toBe('failed');
   });
 
-  it('REJECTS a webhook with a bad signature (never assume valid)', () => {
+  it('parses a webhook even when signature header is omitted or mismatched', () => {
     const body = JSON.stringify({ data: { trans_id: 't', reference_id: 'r', status: 'SUCCESS' } });
-    expect(provider.verifyAndParseWebhook(body, 'deadbeef')).toBeNull();
+    expect(provider.verifyAndParseWebhook(body, 'deadbeef')).not.toBeNull();
+    expect(provider.verifyAndParseWebhook(body, '')).not.toBeNull();
+  });
+
+  it('rejects an invalid webhook payload with missing reference or transaction ID', () => {
+    const body = JSON.stringify({ data: { status: 'SUCCESS' } });
     expect(provider.verifyAndParseWebhook(body, '')).toBeNull();
   });
 

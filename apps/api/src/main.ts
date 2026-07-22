@@ -31,6 +31,16 @@ async function bootstrap(): Promise<void> {
 
   // rawBody: the payment webhook verifies an HMAC over the exact bytes received.
   const app = await NestFactory.create(AppModule, { bufferLogs: true, rawBody: true });
+
+  // Enable CORS so cross-origin frontend requests (e.g. localhost:3000) pass OPTIONS preflight.
+  app.enableCors({
+    origin: true,
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
+    credentials: true,
+    allowedHeaders:
+      'Content-Type, Accept, Authorization, X-Requested-With, x-muda-signature, x-akabbo-access-token',
+  });
+
   app.useLogger(app.get(PinoLogger));
   app.enableShutdownHooks();
   // Validate & strip every incoming DTO; reject unknown fields (fail closed).

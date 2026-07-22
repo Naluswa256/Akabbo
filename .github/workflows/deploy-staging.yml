@@ -2,8 +2,8 @@ name: Deploy (staging)
 
 # Builds the image, pushes to Artifact Registry, runs migrations as a one-shot
 # Cloud Run Job with Cloud SQL proxy, then deploys the api + worker Cloud Run
-# services. Gated on repo variables (GCP_PROJECT_ID). If absent the job is
-# skipped, so a fork or unconfigured repo never fails on deploy.
+# services. Requires GCP_WORKLOAD_IDENTITY_PROVIDER + GCP_DEPLOY_SERVICE_ACCOUNT
+# secrets and GCP_PROJECT_ID + GCP_REGION variables to be set in the repo.
 #
 # Cloud SQL connection: Cloud Run services use the built-in Cloud SQL Auth Proxy
 # (unix socket via --add-cloudsql-instances). Both DATABASE_URL and DIRECT_URL
@@ -18,8 +18,6 @@ jobs:
   deploy:
     name: Build · Migrate · Deploy
     runs-on: ubuntu-latest
-    # Only run when GCP auth is configured.
-    if: ${{ github.event_name == 'workflow_dispatch' || vars.GCP_PROJECT_ID != '' }}
     permissions:
       contents: read
       id-token: write # for Workload Identity Federation

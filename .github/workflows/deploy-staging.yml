@@ -6,8 +6,8 @@ name: Deploy (staging)
 # skipped, so a fork or unconfigured repo never fails on deploy.
 #
 # Cloud SQL connection: Cloud Run services use the built-in Cloud SQL Auth Proxy
-# (unix socket via run.googleapis.com/cloudsql-instances annotation).
-# The migration job uses DIRECT_URL (public IP) with SSL.
+# (unix socket via --add-cloudsql-instances). Both DATABASE_URL and DIRECT_URL
+# point to the socket secret (akabbo-database-url).
 
 on:
   push:
@@ -51,9 +51,10 @@ jobs:
           docker push "$IMAGE"
 
       - name: Run database migrations (one-shot Cloud Run Job)
-        # The migration job uses DIRECT_URL (Cloud SQL public IP with SSL) because
-        # the Cloud Run Job needs Cloud SQL proxy for socket access, but prisma migrate
-        # also works with direct IP+SSL. We use DIRECT_URL for the migration job.
+        # The migration job runs on Cloud Run with the Cloud SQL Auth Proxy attached
+        # (--add-cloudsql-instances). Both DATABASE_URL and DIRECT_URL use the socket
+        # URL (akabbo-database-url) — the raw public IP is not reachable from Cloud Run
+        # without authorized networks. The socket path is the correct connection method.
         run: |
           gcloud run jobs deploy akabbo-migrate \
             --image "$IMAGE" \
@@ -62,7 +63,7 @@ jobs:
             --add-cloudsql-instances "$SQL_INSTANCE" \
             --command node \
             --args "node_modules/prisma/build/index.js,migrate,deploy" \
-            --set-secrets "DATABASE_URL=akabbo-direct-url:latest,DIRECT_URL=akabbo-direct-url:latest" \
+            --set-secrets "DATABASE_URL=akabbo-database-url:latest,DIRECT_URL=akabbo-database-url:latest" \
             --max-retries 1 --quiet
           gcloud run jobs execute akabbo-migrate --region "$GCP_REGION" --wait
 
@@ -75,8 +76,8 @@ jobs:
             --allow-unauthenticated \
             --service-account "$CLOUD_RUN_SA" \
             --add-cloudsql-instances "$SQL_INSTANCE" \
-            --set-env-vars "APP_ROLE=api,NODE_ENV=production,LOG_LEVEL=info,STORAGE_PROVIDER=gcs,GCS_BUCKET=akabbo-staging-documents,GCS_SERVICE_ACCOUNT_EMAIL=${CLOUD_RUN_SA},SMS_PROVIDER=ugsms,UGSMS_BASE_URL=https://ugsms.com/api/v2,UGSMS_SENDER_ID=AKABBO,PAYMENT_PROVIDER=muda,MUDA_BASE_URL=https://api.muda.tech/v1" \
-            --set-secrets "DATABASE_URL=akabbo-database-url:latest,DIRECT_URL=akabbo-direct-url:latest,JWT_SECRET=akabbo-jwt-secret:latest,UGSMS_API_KEY=akabbo-ugsms-api-key:latest,MUDA_CLIENT_ID=akabbo-muda-client-id:latest,MUDA_CLIENT_SECRET=akabbo-muda-client-secret:latest,MUDA_OAUTH_URL=akabbo-muda-oauth-url:latest,MUDA_WEBHOOK_SECRET=akabbo-muda-webhook-secret:latest,SENTRY_DSN=akabbo-sentry-dsn:latest" \
+            --set-env-vars "APP_ROLE=api,NODE_ENV=production,LOG_LEVEL=info,AUTH_EXPOSE_OTP=false,STORAGE_PROVIDER=gcs,GCS_BUCKET=akabbo-staging-documents,GCS_SERVICE_ACCOUNT_EMAIL=${CLOUD_RUN_SA},SMS_PROVIDER=ugsms,UGSMS_BASE_URL=https://ugsms.com/api/v2,UGSMS_SENDER_ID=AKABBO,PAYMENT_PROVIDER=muda,MUDA_BASE_URL=https://api.muda.tech/v1" \
+            --set-secrets "DATABASE_URL=akabbo-database-url:latest,DIRECT_URL=akabbo-database-url:latest,JWT_SECRET=akabbo-jwt-secret:latest,UGSMS_API_KEY=akabbo-ugsms-api-key:latest,MUDA_CLIENT_ID=akabbo-muda-client-id:latest,MUDA_CLIENT_SECRET=akabbo-muda-client-secret:latest,MUDA_OAUTH_URL=akabbo-muda-oauth-url:latest,MUDA_WEBHOOK_SECRET=akabbo-muda-webhook-secret:latest,SENTRY_DSN=akabbo-sentry-dsn:latest" \
             --min-instances 0 \
             --max-instances 4 \
             --quiet
@@ -92,8 +93,8 @@ jobs:
             --ingress internal \
             --service-account "$CLOUD_RUN_SA" \
             --add-cloudsql-instances "$SQL_INSTANCE" \
-            --set-env-vars "APP_ROLE=worker,NODE_ENV=production,LOG_LEVEL=info,WORKER_HEARTBEAT_MS=15000,STORAGE_PROVIDER=gcs,GCS_BUCKET=akabbo-staging-documents,GCS_SERVICE_ACCOUNT_EMAIL=${CLOUD_RUN_SA},SMS_PROVIDER=ugsms,UGSMS_BASE_URL=https://ugsms.com/api/v2,UGSMS_SENDER_ID=AKABBO,PAYMENT_PROVIDER=muda,MUDA_BASE_URL=https://api.muda.tech/v1" \
-            --set-secrets "DATABASE_URL=akabbo-database-url:latest,DIRECT_URL=akabbo-direct-url:latest,JWT_SECRET=akabbo-jwt-secret:latest,UGSMS_API_KEY=akabbo-ugsms-api-key:latest,MUDA_CLIENT_ID=akabbo-muda-client-id:latest,MUDA_CLIENT_SECRET=akabbo-muda-client-secret:latest,MUDA_OAUTH_URL=akabbo-muda-oauth-url:latest,MUDA_WEBHOOK_SECRET=akabbo-muda-webhook-secret:latest,SENTRY_DSN=akabbo-sentry-dsn:latest" \
+            --set-env-vars "APP_ROLE=worker,NODE_ENV=production,LOG_LEVEL=info,AUTH_EXPOSE_OTP=false,WORKER_HEARTBEAT_MS=15000,STORAGE_PROVIDER=gcs,GCS_BUCKET=akabbo-staging-documents,GCS_SERVICE_ACCOUNT_EMAIL=${CLOUD_RUN_SA},SMS_PROVIDER=ugsms,UGSMS_BASE_URL=https://ugsms.com/api/v2,UGSMS_SENDER_ID=AKABBO,PAYMENT_PROVIDER=muda,MUDA_BASE_URL=https://api.muda.tech/v1" \
+            --set-secrets "DATABASE_URL=akabbo-database-url:latest,DIRECT_URL=akabbo-database-url:latest,JWT_SECRET=akabbo-jwt-secret:latest,UGSMS_API_KEY=akabbo-ugsms-api-key:latest,MUDA_CLIENT_ID=akabbo-muda-client-id:latest,MUDA_CLIENT_SECRET=akabbo-muda-client-secret:latest,MUDA_OAUTH_URL=akabbo-muda-oauth-url:latest,MUDA_WEBHOOK_SECRET=akabbo-muda-webhook-secret:latest,SENTRY_DSN=akabbo-sentry-dsn:latest" \
             --quiet
 
       - name: Smoke-test API health

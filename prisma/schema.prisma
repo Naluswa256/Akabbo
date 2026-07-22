@@ -1,0 +1,1147 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// AKABBO — Prisma schema
+//
+// PHASE 1: Identity & Access + the Ledger core. NO AI, NO SMS, NO billing.
+// Invariants baked in from this first domain migration (CLAUDE.md §3):
+//   • every commitment/fulfillment carries provenance (source, confidence,
+//     created_by) — §3.2
+//   • every mutation writes an append-only audit_event in the same txn — §3.1
+//   • money-critical values are integers (minor units), balances derived — §3.4
+//   • tenant tables are RLS-scoped by event_id (policies live in a raw SQL
+//     migration; Prisma cannot express RLS) — §3.7
+//   • the transactional outbox exists (written to; drained from Phase 3) — §5
+//
+// Money: stored as BigInt in the currency's MINOR units (UGX has none, so this
+// is just an integer amount) — never floats. `outstanding = committed_value −
+// Σ fulfillment.value` is DERIVED in SQL, never stored.
+// ─────────────────────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+  // Default output (node_modules/@prisma/client): resolvable at runtime from
+  // any dist location and inside the container, since node_modules ships with
+  // the image. A custom src path would not be copied into `dist` by tsc.
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+/// Role a user holds within a single event (the tenant). A user may hold
+/// different roles in different events. Ordering is significant for the
+/// permission matrix (OWNER strongest → VIEWER weakest).
+enum EventRole {
+  OWNER
+  CO_OWNER
+  COORDINATOR
+  FINANCE
+  VIEWER
+}
+
+/// Lifecycle of an event membership. A membership created by accepting an
+/// invitation is ACTIVE; REMOVED preserves history (we never hard-delete
+/// membership rows). Seats are counted as ACTIVE members (metering doc §7).
+enum MembershipStatus {
+  INVITED
+  ACTIVE
+  REMOVED
+}
+
+/// Lifecycle of an invitation token (blueprint §36). A leaked link is inert
+/// without the invitee completing OTP; states let us expire/revoke.
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+/// Event lifecycle (§12, §33). Contribution collection is an EVENT STATE, not a
+/// separate "campaign" object — no unnecessary abstraction. CLOSED/ARCHIVED are
+/// read-only: writes are rejected by the status gate; an owner must reopen
+/// (→ ACTIVE) to make an authorized correction, and that reopen is audited.
+enum EventStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  CLOSED
+  ARCHIVED
+}
+
+enum PledgeType {
+  CASH
+  ITEM
+  SERVICE
+}
+
+enum PledgeStatus {
+  PLEDGED
+  PARTIALLY_FULFILLED
+  FULFILLED
+  CANCELLED
+}
+
+enum FulfillmentKind {
+  PAYMENT
+  DELIVERY
+}
+
+/// How the money moved (§14). Akabbo never touches it — this only records what
+/// the organizer says happened outside the platform.
+enum PaymentMethod {
+  MTN
+  AIRTEL
+  CASH
+  BANK
+  OTHER
+  UNKNOWN
+}
+
+/// HONESTY ABOUT EVIDENCE (§14, §15). We never claim a payment is verified
+/// unless we actually hold proof.
+///   REPORTED   — a human told us it happened (the V1 default)
+///   UNVERIFIED — checked and could not confirm
+///   VERIFIED   — reserved: requires external evidence (the MoMo SMS-ingestion
+///                wedge). Nothing in V1 may set this automatically.
+enum VerificationStatus {
+  REPORTED
+  UNVERIFIED
+  VERIFIED
+}
+
+/// How we know a record — the provenance backbone (blueprint §6). Phase 1 only
+/// ever writes `human_typed` and `manual_correction`; the AI/document/SMS
+/// sources arrive in later phases but are first-class from day one so no
+/// migration is needed to add them.
+enum ProvenanceSource {
+  human_typed
+  ai_from_chat
+  ai_from_document
+  ai_from_payment_sms
+  manual_correction
+  import
+}
+
+enum OutboxStatus {
+  PENDING
+  PROCESSED
+  FAILED
+}
+
+/// What a usage_event meters. Phase 2 writes `llm_call`; others arrive with
+/// their phases. AI is metered for OBSERVABILITY only, never to gate a paying
+/// user (metering doc §1, §7.2).
+enum UsageKind {
+  llm_call
+  sms
+  doc
+  storage
+}
+
+enum ConfirmationStatus {
+  PENDING
+  CONFIRMED
+  REJECTED
+  EXPIRED
+}
+
+/// What an uploaded file IS (§17). Files are never dumped in one generic bucket
+/// without metadata — kind drives access rules and processing.
+enum FileKind {
+  PROFILE_PHOTO
+  DOCUMENT
+  DOCUMENT_PHOTO
+  PAYMENT_EVIDENCE
+  CONTRIBUTION_EVIDENCE
+  EVENT_PHOTO
+}
+
+/// Document processing lifecycle (§31). REQUIRES_REVIEW is the honest state for
+/// an extraction that produced proposals a human must confirm (§6.1).
+enum DocumentStatus {
+  UPLOADED
+  PROCESSING
+  PROCESSED
+  FAILED
+  REQUIRES_REVIEW
+  APPROVED
+}
+
+/// What we tried to read out of a document.
+enum ExtractionKind {
+  BUDGET
+  CONTRIBUTION_LIST
+  UNKNOWN
+}
+
+/// How much of the contributor/pledge list the PUBLIC event page reveals
+/// (transparency spec Part 5, 15). Aggregate totals are always public when the
+/// event is public; this governs only the per-person detail. Ugandan wedding
+/// default is NAMES_AND_AMOUNTS — transparency is expected, not private.
+enum ContributorVisibility {
+  NAMES_AND_AMOUNTS
+  NAMES_ONLY
+  AGGREGATE_ONLY
+  HIDDEN
+}
+
+/// Whether the PUBLIC event page shows the budget breakdown (Part 4, 16).
+/// PARTIALLY_PUBLIC is expressed per-line via BudgetItem.isPublic.
+enum BudgetVisibility {
+  PUBLIC
+  PARTIALLY_PUBLIC
+  HIDDEN
+}
+
+/// Lifecycle of a public event announcement (Part 17). Only PUBLISHED rows
+/// appear on the public page; DRAFT is the organizer/AI staging state.
+enum AnnouncementStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+/// Who authored a stored conversation turn. Only the human turns and the AI's
+/// replies are persisted for context — intermediate tool calls are ephemeral.
+enum ConversationMessageRole {
+  user
+  assistant
+}
+
+/// Generic social-group classification (next-increment §9.1/9.2). NOT hardcoded
+/// to weddings — a funeral or church fundraiser uses the same table. FAMILY_SIDE
+/// carries bride/groom-side semantics WITHOUT baking them into names.
+enum GroupKind {
+  FAMILY_SIDE
+  FAMILY
+  FRIENDS
+  WORKMATES
+  CHURCH
+  SCHOOL
+  VILLAGE
+  COMMITTEE
+  DIASPORA
+  CLAN
+  OTHER
+}
+
+/// A plan attaches to EITHER an event (per-event pack, the primary SKU) or an
+/// account (recurring subscription) — scope-agnostic, no special-casing
+/// (metering doc §7.1, §3.2).
+enum PlanScope {
+  EVENT
+  ACCOUNT
+}
+
+/// Lifecycle of an entitlement grant (metering doc §7.1). TRIALING = the free
+/// tier (permanent, volume-gated — §10); the paid states follow the payment.
+enum GrantStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  EXPIRED
+  CANCELLED
+}
+
+/// APPEND-ONLY SMS-credit movements (metering doc §6, §7.4). Signed `amount`:
+/// GRANT/REFUND add, RESERVE subtracts, COMMIT is a 0-amount delivery marker.
+/// balance = SUM(amount). Never mutated in place — disputes need honest history.
+enum SmsLedgerKind {
+  GRANT
+  RESERVE
+  COMMIT
+  REFUND
+}
+
+/// Settlement state of a SaaS-fee charge (metering doc §7.4, §8). PAID is set
+/// ONLY by an idempotent payment webhook — never by the client.
+enum InvoiceStatus {
+  PENDING
+  PAID
+  FAILED
+  CANCELLED
+}
+
+/// Why an SMS batch is being sent (blueprint §2.4 Communications). REMINDER
+/// targets outstanding pledges; ANNOUNCEMENT broadcasts to everyone.
+enum SmsCampaignKind {
+  REMINDER
+  ANNOUNCEMENT
+  THANK_YOU
+  CUSTOM
+}
+
+/// Lifecycle of an SMS batch. SENDING once queued to the worker; SENT/PARTIAL
+/// after the provider call; the per-message status is the source of truth.
+enum SmsCampaignStatus {
+  QUEUED
+  SENDING
+  SENT
+  PARTIAL
+  FAILED
+}
+
+/// Delivery state of one outbound SMS (metering doc §6). QUEUED holds a reserved
+/// credit; SENT commits it; FAILED refunds it. DELIVERED awaits a receipt
+/// (provider-dependent) and is reserved for later — never claimed without proof.
+enum SmsStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  FAILED
+}
+
+// ─── Identity & Access ───────────────────────────────────────────────────────
+
+model User {
+  id            String   @id @default(uuid()) @db.Uuid
+  /// E.164 phone — the primary credential. PII: never logged (§3.10).
+  phone         String   @unique
+  phoneVerified Boolean  @default(false) @map("phone_verified")
+  displayName   String?  @map("display_name")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  ownedEvents                Event[]              @relation("EventOwner")
+  memberships                EventMember[]
+  createdPeople              Person[]             @relation("PersonCreatedBy")
+  /// Person records this user has CLAIMED (person.user_id → this user). The
+  /// hinge that links a contributor Person to an authenticated User without
+  /// creating a duplicate (design review §0).
+  claimedPeople              Person[]             @relation("PersonUser")
+  invitedMemberships         EventMember[]        @relation("MemberInvitedBy")
+  sentInvitations            Invitation[]         @relation("InvitationInviter")
+  acceptedInvitations        Invitation[]         @relation("InvitationAcceptor")
+  createdAnnouncements       EventAnnouncement[]  @relation("AnnouncementCreatedBy")
+  createdPaymentInstructions PaymentInstruction[] @relation("PaymentInstructionCreatedBy")
+  conversations              Conversation[]       @relation("UserConversations")
+  createdGroups              ContributorGroup[]   @relation("GroupCreatedBy")
+  billingAccounts            BillingAccount[]     @relation("BillingAccountOwner")
+
+  @@map("user")
+}
+
+model AuthOtpChallenge {
+  id         String    @id @default(uuid()) @db.Uuid
+  /// PII: never logged (§3.10).
+  phone      String
+  /// Hashed OTP — the plaintext code is never stored.
+  codeHash   String    @map("code_hash")
+  expiresAt  DateTime  @map("expires_at")
+  consumedAt DateTime? @map("consumed_at")
+  attempts   Int       @default(0)
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@index([phone])
+  @@map("auth_otp_challenge")
+}
+
+model Event {
+  id           String      @id @default(uuid()) @db.Uuid
+  name         String
+  /// Human-readable, URL-safe identity (§3). Unique across events.
+  slug         String      @unique
+  status       EventStatus @default(ACTIVE)
+  /// Denormalised owner for convenience; authority is via EventMember roles.
+  ownerUserId  String      @map("owner_user_id") @db.Uuid
+  /// UGX-only for V1 (blueprint §13.2); column exists so multi-currency is a
+  /// data change, not a schema migration.
+  currency     String      @default("UGX")
+  /// Target contribution amount in minor units (§2: "25 million"). Drives the
+  /// "% covered" answer. Nullable — an event may start without a target.
+  targetAmount BigInt?     @map("target_amount")
+  eventDate    DateTime?   @map("event_date")
+  /// Public-facing blurb shown on the transparency page (Part 3/11). Optional.
+  description  String?
+  /// Regional context kept as DATA, not hardcoded architecture (§3), so
+  /// expansion beyond Uganda is a value change.
+  timezone     String      @default("Africa/Kampala")
+  country      String      @default("UG")
+
+  // ── Public transparency layer (transparency spec) ──────────────────────────
+  /// Master switch for the public/shareable event page. TRUE by Ugandan default
+  /// (transparency is expected). Setting FALSE is instant revocation of the link
+  /// (Part 20). The public read path fails closed unless this is true.
+  isPublic              Boolean               @default(true) @map("is_public")
+  /// Optional shared secret for invite-only links (`/e/:slug?t=<token>`). NULL =
+  /// anyone with the slug may view. Rotating it regenerates access (Part 20).
+  publicAccessToken     String?               @map("public_access_token")
+  /// How much per-contributor detail the public page reveals (Part 5/15).
+  contributorVisibility ContributorVisibility @default(NAMES_AND_AMOUNTS) @map("contributor_visibility")
+  /// Whether/how the public page shows the budget (Part 4/16).
+  budgetVisibility      BudgetVisibility      @default(PUBLIC) @map("budget_visibility")
+  /// Bumped on public-settings changes so caches/ETags invalidate deterministically.
+  publicRevision        Int                   @default(1) @map("public_revision")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  owner                User                  @relation("EventOwner", fields: [ownerUserId], references: [id])
+  members              EventMember[]
+  people               Person[]
+  pledges              Pledge[]
+  fulfillments         Fulfillment[]
+  budgets              Budget[]
+  budgetItems          BudgetItem[]
+  allocations          Allocation[]
+  auditEvents          AuditEvent[]
+  outbox               Outbox[]
+  usageEvents          UsageEvent[]
+  pendingConfirmations PendingConfirmation[]
+  invitations          Invitation[]
+  files                FileObject[]
+  documents            Document[]
+  extractions          Extraction[]
+  announcements        EventAnnouncement[]
+  paymentInstructions  PaymentInstruction[]
+  activeConversations  Conversation[]        @relation("EventActiveConversations")
+  contributorGroups    ContributorGroup[]
+  personGroups         PersonGroup[]
+  entitlementGrants    EntitlementGrant[]
+  smsCampaigns         SmsCampaign[]
+  smsMessages          SmsMessage[]
+
+  @@index([ownerUserId])
+  @@map("event")
+}
+
+model EventMember {
+  id          String           @id @default(uuid()) @db.Uuid
+  eventId     String           @map("event_id") @db.Uuid
+  userId      String           @map("user_id") @db.Uuid
+  role        EventRole
+  /// Lifecycle: ACTIVE members hold seats; REMOVED preserves history (§7).
+  status      MembershipStatus @default(ACTIVE)
+  /// Who invited this member (null for the creator/owner). Attribution (§28).
+  invitedById String?          @map("invited_by") @db.Uuid
+  createdAt   DateTime         @default(now()) @map("created_at")
+
+  event     Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user      User  @relation(fields: [userId], references: [id])
+  invitedBy User? @relation("MemberInvitedBy", fields: [invitedById], references: [id])
+
+  @@unique([eventId, userId])
+  @@index([userId])
+  @@map("event_member")
+}
+
+/// An invitation to JOIN an event as a team member (blueprint §4, §36). It
+/// precedes the EventMember row: you can invite someone who has no account yet.
+/// Protected by an unguessable `token` — a leaked link is inert until the
+/// invitee completes OTP and accepts. NOT under event-RLS (the invitee is not a
+/// member yet); the token is the capability. States: PENDING → ACCEPTED |
+/// EXPIRED | REVOKED.
+model Invitation {
+  id           String           @id @default(uuid()) @db.Uuid
+  eventId      String           @map("event_id") @db.Uuid
+  /// Unguessable capability token embedded in the share link.
+  token        String           @unique
+  role         EventRole
+  status       InvitationStatus @default(PENDING)
+  /// Optional target phone (for display / future SMS delivery). PII.
+  invitedPhone String?          @map("invited_phone")
+  invitedById  String           @map("invited_by") @db.Uuid
+  maxUses      Int              @default(1) @map("max_uses")
+  uses         Int              @default(0)
+  expiresAt    DateTime         @map("expires_at")
+  acceptedById String?          @map("accepted_by") @db.Uuid
+  acceptedAt   DateTime?        @map("accepted_at")
+  createdAt    DateTime         @default(now()) @map("created_at")
+
+  event      Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  invitedBy  User  @relation("InvitationInviter", fields: [invitedById], references: [id])
+  acceptedBy User? @relation("InvitationAcceptor", fields: [acceptedById], references: [id])
+
+  @@index([eventId])
+  @@map("invitation")
+}
+
+// ─── Ledger (the core) ───────────────────────────────────────────────────────
+
+/// A contributor within an event. May or may not be a User (§5). PII (phone) is
+/// optional and never logged.
+model Person {
+  id          String           @id @default(uuid()) @db.Uuid
+  eventId     String           @map("event_id") @db.Uuid
+  displayName String           @map("display_name")
+  phone       String?
+  /// THE HINGE (design review §0): nullable link to an authenticated User. NULL
+  /// for the ~500 contributors who never make an account; set when a person is
+  /// CLAIMED. `@@unique([eventId, userId])` — Postgres treats NULLs as distinct,
+  /// so many unclaimed persons coexist, but at most one person per user per
+  /// event, so a claim can never fork a person into a duplicate.
+  userId      String?          @map("user_id") @db.Uuid
+  // Provenance (§3.2)
+  source      ProvenanceSource @default(human_typed)
+  createdById String?          @map("created_by") @db.Uuid
+  createdAt   DateTime         @default(now()) @map("created_at")
+  updatedAt   DateTime         @updatedAt @map("updated_at")
+
+  event       Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  createdBy   User?         @relation("PersonCreatedBy", fields: [createdById], references: [id])
+  user        User?         @relation("PersonUser", fields: [userId], references: [id])
+  pledges     Pledge[]
+  /// Contributor photos and evidence attached to this person (§17).
+  files       FileObject[]
+  groups      PersonGroup[]
+  smsMessages SmsMessage[]
+
+  @@unique([eventId, userId])
+  @@index([eventId])
+  @@map("person")
+}
+
+model Pledge {
+  id                 String           @id @default(uuid()) @db.Uuid
+  eventId            String           @map("event_id") @db.Uuid
+  personId           String           @map("person_id") @db.Uuid
+  type               PledgeType       @default(CASH)
+  /// Committed value in minor units (§ money note). Derived outstanding =
+  /// committedValue − Σ fulfillment.value.
+  committedValue     BigInt           @map("committed_value")
+  currency           String           @default("UGX")
+  status             PledgeStatus     @default(PLEDGED)
+  targetBudgetItemId String?          @map("target_budget_item_id") @db.Uuid
+  /// IN-KIND detail (next-increment §9.3): what an ITEM/SERVICE pledge actually
+  /// is — "100 white plastic chairs". Money fields stay 0 for pure in-kind; we
+  /// never invent a monetary value for goods (estimatedValue only when given).
+  description        String?
+  quantity           Int?
+  unit               String?
+  estimatedValue     BigInt?          @map("estimated_value")
+  /// A DIRECT contribution is a gift with no prior commitment (§15: "Peter gave
+  /// me 100k cash") — modelled as a pledge that is immediately fully fulfilled,
+  /// so `outstanding = committed − Σ fulfillments` stays universal and we avoid
+  /// a third concept.
+  isDirect           Boolean          @default(false) @map("is_direct")
+  /// Client-supplied key making a retried create a no-op instead of a second
+  /// commitment (§25, §42). NULLs are distinct, so most rows omit it.
+  idempotencyKey     String?          @map("idempotency_key")
+  // Provenance (§3.2)
+  source             ProvenanceSource @default(human_typed)
+  confidence         Float?
+  createdById        String?          @map("created_by") @db.Uuid
+  createdAt          DateTime         @default(now()) @map("created_at")
+  updatedAt          DateTime         @updatedAt @map("updated_at")
+
+  event        Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  person       Person        @relation(fields: [personId], references: [id])
+  budgetItem   BudgetItem?   @relation(fields: [targetBudgetItemId], references: [id])
+  fulfillments Fulfillment[]
+
+  @@unique([eventId, idempotencyKey])
+  @@index([eventId])
+  @@index([personId])
+  @@map("pledge")
+}
+
+model Fulfillment {
+  id                 String             @id @default(uuid()) @db.Uuid
+  eventId            String             @map("event_id") @db.Uuid
+  pledgeId           String             @map("pledge_id") @db.Uuid
+  kind               FulfillmentKind    @default(PAYMENT)
+  /// Discharged value in minor units.
+  value              BigInt
+  /// Explicit currency (next-increment §9.4). Defaults UGX; set when a diaspora
+  /// contributor gives in USD/GBP/EUR. Never auto-converted — totals stay honest.
+  currency           String             @default("UGX")
+  /// How the money moved (§14). Defaults UNKNOWN — we record what we were told.
+  method             PaymentMethod      @default(UNKNOWN)
+  /// Evidence honesty (§14, §15): REPORTED unless we actually hold proof.
+  verificationStatus VerificationStatus @default(REPORTED) @map("verification_status")
+  /// Free-text note from the recorder ("gave it to Mary at the meeting").
+  note               String?
+  occurredAt         DateTime           @default(now()) @map("occurred_at")
+  /// Client-supplied key so a retried payment is a no-op, never a second
+  /// booking of the same money (§25, §42).
+  idempotencyKey     String?            @map("idempotency_key")
+  // Provenance (§3.2)
+  source             ProvenanceSource   @default(human_typed)
+  confidence         Float?
+  createdById        String?            @map("created_by") @db.Uuid
+  createdAt          DateTime           @default(now()) @map("created_at")
+
+  event       Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  pledge      Pledge       @relation(fields: [pledgeId], references: [id], onDelete: Cascade)
+  allocations Allocation[]
+
+  @@unique([eventId, idempotencyKey])
+  @@index([eventId])
+  @@index([pledgeId])
+  @@index([pledgeId, value, createdAt])
+  @@map("fulfillment")
+}
+
+model Budget {
+  id        String   @id @default(uuid()) @db.Uuid
+  eventId   String   @map("event_id") @db.Uuid
+  name      String   @default("Main budget")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  event Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  items BudgetItem[]
+
+  @@index([eventId])
+  @@map("budget")
+}
+
+model BudgetItem {
+  id               String           @id @default(uuid()) @db.Uuid
+  eventId          String           @map("event_id") @db.Uuid
+  budgetId         String           @map("budget_id") @db.Uuid
+  name             String
+  targetValue      BigInt           @default(0) @map("target_value")
+  /// Per-line public visibility for PARTIALLY_PUBLIC budgets (Part 16): a line
+  /// with private vendor pricing can be hidden while the rest stays public.
+  isPublic         Boolean          @default(true) @map("is_public")
+  /// PROVENANCE (§6): how we know this line. An item read off a photographed
+  /// budget is `ai_from_document` and links back to the originating document,
+  /// so every figure is traceable to its source artifact.
+  source           ProvenanceSource @default(human_typed)
+  confidence       Float?
+  sourceDocumentId String?          @map("source_document_id") @db.Uuid
+  createdById      String?          @map("created_by") @db.Uuid
+  /// Optimistic-concurrency guard: two people editing the budget at once (§42)
+  /// cannot silently clobber each other — a stale version is rejected.
+  version          Int              @default(1)
+  createdAt        DateTime         @default(now()) @map("created_at")
+  updatedAt        DateTime         @updatedAt @map("updated_at")
+
+  event          Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  budget         Budget       @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  sourceDocument Document?    @relation(fields: [sourceDocumentId], references: [id])
+  pledges        Pledge[]
+  allocations    Allocation[]
+
+  @@index([eventId])
+  @@index([budgetId])
+  @@map("budget_item")
+}
+
+model Allocation {
+  id            String   @id @default(uuid()) @db.Uuid
+  eventId       String   @map("event_id") @db.Uuid
+  fulfillmentId String   @map("fulfillment_id") @db.Uuid
+  budgetItemId  String   @map("budget_item_id") @db.Uuid
+  value         BigInt
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  event       Event       @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  fulfillment Fulfillment @relation(fields: [fulfillmentId], references: [id], onDelete: Cascade)
+  budgetItem  BudgetItem  @relation(fields: [budgetItemId], references: [id])
+
+  @@index([eventId])
+  @@map("allocation")
+}
+
+/// Append-only audit trail (§3.1, §3.3). Written in the SAME transaction as
+/// every mutation. UPDATE/DELETE are blocked by a DB trigger (see RLS
+/// migration) so history is truly immutable — corrections add new rows.
+model AuditEvent {
+  id           String           @id @default(uuid()) @db.Uuid
+  eventId      String           @map("event_id") @db.Uuid
+  actorUserId  String?          @map("actor_user_id") @db.Uuid
+  action       String
+  resourceType String           @map("resource_type")
+  resourceId   String           @map("resource_id")
+  source       ProvenanceSource @default(human_typed)
+  /// old → new snapshots; null oldValue for creates.
+  oldValue     Json?            @map("old_value")
+  newValue     Json?            @map("new_value")
+  createdAt    DateTime         @default(now()) @map("created_at")
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([eventId, createdAt])
+  @@index([resourceType, resourceId])
+  @@map("audit_event")
+}
+
+/// Transactional outbox (§5). Rows are written in the mutation's transaction;
+/// the worker drains them from Phase 3 (SMS fan-out). idempotencyKey guarantees
+/// a retry never double-sends (§3.5).
+model Outbox {
+  id             String       @id @default(uuid()) @db.Uuid
+  eventId        String       @map("event_id") @db.Uuid
+  topic          String
+  payload        Json
+  status         OutboxStatus @default(PENDING)
+  idempotencyKey String       @unique @map("idempotency_key")
+  attempts       Int          @default(0)
+  createdAt      DateTime     @default(now()) @map("created_at")
+  processedAt    DateTime?    @map("processed_at")
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@index([eventId])
+  @@map("outbox")
+}
+
+// ─── Documents & Extraction (Phase 4 — a bounded context, blueprint §2.4) ────
+
+/// An uploaded artifact. PRIVATE by default (§10): the bytes live in object
+/// storage (R2) and are only ever served via a short-lived signed URL to a
+/// permitted member. We keep real metadata (§17): kind, mime, size, hash —
+/// never an untyped bucket.
+model FileObject {
+  id               String   @id @default(uuid()) @db.Uuid
+  eventId          String   @map("event_id") @db.Uuid
+  kind             FileKind
+  /// Opaque key in object storage. Never a public URL.
+  storageKey       String   @map("storage_key")
+  mimeType         String   @map("mime_type")
+  sizeBytes        Int      @map("size_bytes")
+  /// Content hash — dedupe and tamper-evidence for evidence files.
+  sha256           String
+  originalFilename String?  @map("original_filename")
+  /// Optional subject: a contributor photo attaches to a person (§17).
+  personId         String?  @map("person_id") @db.Uuid
+  uploadedById     String?  @map("uploaded_by") @db.Uuid
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  event     Event      @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  person    Person?    @relation(fields: [personId], references: [id])
+  documents Document[]
+
+  @@index([eventId])
+  @@index([eventId, kind])
+  @@index([personId])
+  @@map("file_object")
+}
+
+/// A file submitted for EXTRACTION (a budget PDF, a photo of a handwritten
+/// list). The original is preserved forever — the extraction is a derived
+/// projection, never a replacement (§10 Phase-4 DoD).
+model Document {
+  id           String         @id @default(uuid()) @db.Uuid
+  eventId      String         @map("event_id") @db.Uuid
+  fileId       String         @map("file_id") @db.Uuid
+  kind         ExtractionKind @default(UNKNOWN)
+  status       DocumentStatus @default(UPLOADED)
+  /// Populated when status = FAILED (§42: extraction can fail).
+  error        String?
+  attempts     Int            @default(0)
+  uploadedById String?        @map("uploaded_by") @db.Uuid
+  processedAt  DateTime?      @map("processed_at")
+  createdAt    DateTime       @default(now()) @map("created_at")
+  updatedAt    DateTime       @updatedAt @map("updated_at")
+
+  event       Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  file        FileObject   @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  extractions Extraction[]
+  budgetItems BudgetItem[]
+
+  @@index([eventId])
+  @@index([status])
+  @@map("document")
+}
+
+/// The AI-derived reading of a document (§39: EXTRACTION is distinct from the
+/// DOCUMENT). Keeps the structured result, the model that produced it, and a
+/// confidence — so every extracted figure is traceable back to its source.
+model Extraction {
+  id         String         @id @default(uuid()) @db.Uuid
+  eventId    String         @map("event_id") @db.Uuid
+  documentId String         @map("document_id") @db.Uuid
+  kind       ExtractionKind @default(UNKNOWN)
+  /// The proposed rows, as returned by the multimodal model. NOT canonical.
+  structured Json
+  /// Raw text layer when one was produced; useful for audit/debug.
+  rawText    String?        @map("raw_text")
+  confidence Float?
+  model      String?
+  itemCount  Int            @default(0) @map("item_count")
+  createdAt  DateTime       @default(now()) @map("created_at")
+
+  event    Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([eventId])
+  @@index([documentId])
+  @@map("extraction")
+}
+
+// ─── Public transparency layer (transparency spec) ───────────────────────────
+
+/// A public event announcement (Part 17). Organizers (often via the AI) draft a
+/// message, then publish it; only PUBLISHED rows surface on the public page. The
+/// body is human-approved text — never executed as an instruction (§10).
+model EventAnnouncement {
+  id          String             @id @default(uuid()) @db.Uuid
+  eventId     String             @map("event_id") @db.Uuid
+  body        String
+  status      AnnouncementStatus @default(DRAFT)
+  /// Provenance (§3.2): AI-drafted announcements are ai_from_chat until a human
+  /// publishes them, keeping the human-in-the-loop chain intact.
+  source      ProvenanceSource   @default(human_typed)
+  createdById String?            @map("created_by") @db.Uuid
+  publishedAt DateTime?          @map("published_at")
+  createdAt   DateTime           @default(now()) @map("created_at")
+  updatedAt   DateTime           @updatedAt @map("updated_at")
+
+  event     Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  createdBy User? @relation("AnnouncementCreatedBy", fields: [createdById], references: [id])
+
+  @@index([eventId])
+  @@index([eventId, status])
+  @@map("event_announcement")
+}
+
+/// The organizer's OWN payment channel shown publicly so contributors know how
+/// to send money DIRECTLY to them (Part 18/19). Akabbo never holds funds — this
+/// is coordination, not payment processing. `details` is display text (a number,
+/// account, or name), not verified account data.
+model PaymentInstruction {
+  id           String        @id @default(uuid()) @db.Uuid
+  eventId      String        @map("event_id") @db.Uuid
+  method       PaymentMethod @default(OTHER)
+  /// Public label, e.g. "MTN Mobile Money".
+  label        String
+  /// Public details, e.g. "0771 234 567 — William Naluswa".
+  details      String
+  displayOrder Int           @default(0) @map("display_order")
+  isPublic     Boolean       @default(true) @map("is_public")
+  createdById  String?       @map("created_by") @db.Uuid
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+
+  event     Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  createdBy User? @relation("PaymentInstructionCreatedBy", fields: [createdById], references: [id])
+
+  @@index([eventId])
+  @@map("payment_instruction")
+}
+
+// ─── AI conversation memory (AI operating layer) ─────────────────────────────
+
+/// A persistent multi-turn conversation between an organizer and the AI
+/// operating layer. USER-scoped (not event-scoped): a conversation may precede
+/// any event (create_event) and may switch between the user's events. Holds the
+/// CONVERSATIONAL active-event pointer — a convenience that NEVER overrides
+/// authorization (the permission gate still runs per action). The DB, not this
+/// transcript, remains the source of truth.
+model Conversation {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
+  /// The event the user is currently talking about; resolved/switched in-chat.
+  activeEventId String?  @map("active_event_id") @db.Uuid
+  title         String?
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  user        User      @relation("UserConversations", fields: [userId], references: [id], onDelete: Cascade)
+  activeEvent Event?    @relation("EventActiveConversations", fields: [activeEventId], references: [id], onDelete: SetNull)
+  messages    Message[]
+
+  @@index([userId])
+  @@map("conversation")
+}
+
+/// One stored turn of a conversation (human or AI). Kept for multi-turn context
+/// ("which John?" → "the one from church"). Intermediate tool calls/results are
+/// NOT stored here — they are re-derived from canonical data each turn.
+model Message {
+  id             String                  @id @default(uuid()) @db.Uuid
+  conversationId String                  @map("conversation_id") @db.Uuid
+  role           ConversationMessageRole
+  content        String
+  createdAt      DateTime                @default(now()) @map("created_at")
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@map("message")
+}
+
+// ─── Contributor groups / family sides (next-increment §9.1/9.2) ─────────────
+
+/// A social group within an event (bride's side, church group, workmates, clan).
+/// Optional and generic — created ONLY from explicit human/AI-with-confirmation
+/// input, never inferred (§9). Used for reporting, filtering and reminder
+/// targeting.
+model ContributorGroup {
+  id          String    @id @default(uuid()) @db.Uuid
+  eventId     String    @map("event_id") @db.Uuid
+  name        String
+  kind        GroupKind @default(OTHER)
+  createdById String?   @map("created_by") @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  event     Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  createdBy User?         @relation("GroupCreatedBy", fields: [createdById], references: [id])
+  members   PersonGroup[]
+
+  @@index([eventId])
+  @@map("contributor_group")
+}
+
+/// Membership of a person in a group (many-to-many, §9.2 "participant/group
+/// association"). `role` optionally captures their role in that group. A person
+/// may belong to several groups (family AND church) without duplication.
+model PersonGroup {
+  id        String   @id @default(uuid()) @db.Uuid
+  eventId   String   @map("event_id") @db.Uuid
+  personId  String   @map("person_id") @db.Uuid
+  groupId   String   @map("group_id") @db.Uuid
+  role      String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  event  Event            @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  person Person           @relation(fields: [personId], references: [id], onDelete: Cascade)
+  group  ContributorGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([personId, groupId])
+  @@index([eventId])
+  @@index([groupId])
+  @@map("person_group")
+}
+
+// ─── AI capture (Phase 2) ────────────────────────────────────────────────────
+
+/// Append-only meter (metering doc §7.1). One row per metered action. For LLM
+/// calls it records tokens + model + cost so we know true per-event/per-account
+/// margin and can spot abuse — WITHOUT ever gating a paying user on AI.
+/// Cost is stored in integer micro-USD (no floats).
+model UsageEvent {
+  id           String    @id @default(uuid()) @db.Uuid
+  eventId      String    @map("event_id") @db.Uuid
+  kind         UsageKind
+  quantity     Int       @default(1)
+  costMicroUsd BigInt    @default(0) @map("cost_micro_usd")
+  tokensIn     Int?      @map("tokens_in")
+  tokensOut    Int?      @map("tokens_out")
+  model        String?
+  /// Free-form context, e.g. { tier, intent }. No PII.
+  meta         Json?
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([eventId, createdAt])
+  @@index([kind, createdAt])
+  @@map("usage_event")
+}
+
+/// A low-confidence or document-derived write parked for human confirmation
+/// (blueprint §6, invariant §3.8). It is NOT canonical state — confirming it
+/// stamps a human into the provenance chain and then executes the same domain
+/// tool. This is also the prompt-injection safety valve.
+model PendingConfirmation {
+  id           String             @id @default(uuid()) @db.Uuid
+  eventId      String             @map("event_id") @db.Uuid
+  /// The proposed tool name, e.g. 'record_payment'.
+  intent       String
+  /// The proposed, validated tool arguments (resolved to ids where possible).
+  payload      Json
+  confidence   Float?
+  source       ProvenanceSource   @default(ai_from_chat)
+  status       ConfirmationStatus @default(PENDING)
+  /// Human-facing prompt, e.g. "I read Peter's pledge as UGX 1,500,000 — right?".
+  prompt       String
+  createdById  String?            @map("created_by") @db.Uuid
+  createdAt    DateTime           @default(now()) @map("created_at")
+  resolvedById String?            @map("resolved_by") @db.Uuid
+  resolvedAt   DateTime?          @map("resolved_at")
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([eventId, status])
+  @@map("pending_confirmation")
+}
+
+// ─── Billing & Entitlements (metering doc §7 — the fifth bounded context) ─────
+
+/// The PAYER of Akabbo's own SaaS fees (metering doc §7.1). Not custody of
+/// contribution money (§8) — this is our normal SaaS billing. Holds the payment
+/// gateway's customer reference. NON-RLS (platform-level, like `user`).
+model BillingAccount {
+  id                 String   @id @default(uuid()) @db.Uuid
+  ownerUserId        String   @map("owner_user_id") @db.Uuid
+  /// Muda.tech / gateway customer ref, if the gateway issues one.
+  gatewayCustomerRef String?  @map("gateway_customer_ref")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  owner    User               @relation("BillingAccountOwner", fields: [ownerUserId], references: [id])
+  grants   EntitlementGrant[]
+  invoices Invoice[]
+
+  @@index([ownerUserId])
+  @@map("billing_account")
+}
+
+/// Plan CATALOG (metering doc §4/§5/§7.1). Price + scope + included allowances +
+/// feature flags. Seeded data — adding a plan is a row, not a migration.
+model Plan {
+  id                 String    @id @default(uuid()) @db.Uuid
+  /// Stable machine code, e.g. FREE, STARTER, ORGANIZER_PRO.
+  code               String    @unique
+  name               String
+  scope              PlanScope
+  /// Price in minor units (UGX has none → integer amount). 0 for Free.
+  priceMinor         BigInt    @default(0) @map("price_minor")
+  currency           String    @default("UGX")
+  /// Hard contributor cap; null = unlimited/soft (Premium/Business).
+  maxContributors    Int?      @map("max_contributors")
+  /// SMS credits granted when this plan is activated (metering doc §6).
+  includedSmsCredits Int       @default(0) @map("included_sms_credits")
+  /// Feature flags this plan unlocks (e.g. unwatermarked_reports, sender_id).
+  features           String[]
+  /// True for recurring subscription plans (§5); false for one-off packs (§4).
+  isSubscription     Boolean   @default(false) @map("is_subscription")
+  createdAt          DateTime  @default(now()) @map("created_at")
+
+  grants   EntitlementGrant[]
+  invoices Invoice[]
+
+  @@map("plan")
+}
+
+/// Links a PLAN to a SCOPE (an event OR an account — exactly one), with a
+/// lifecycle status and period (metering doc §7.1). This is the resolved
+/// entitlement's source of truth. NON-RLS (read by the server-side gate).
+model EntitlementGrant {
+  id          String      @id @default(uuid()) @db.Uuid
+  planId      String      @map("plan_id") @db.Uuid
+  /// Exactly one of eventId / accountId is set (the scope).
+  eventId     String?     @map("event_id") @db.Uuid
+  accountId   String?     @map("account_id") @db.Uuid
+  status      GrantStatus @default(TRIALING)
+  periodStart DateTime    @default(now()) @map("period_start")
+  periodEnd   DateTime?   @map("period_end")
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+
+  plan    Plan            @relation(fields: [planId], references: [id])
+  event   Event?          @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  account BillingAccount? @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  /// At most one ACTIVE-ish grant per event scope (the free trial or a pack).
+  @@unique([eventId])
+  @@index([accountId])
+  @@index([planId])
+  @@map("entitlement_grant")
+}
+
+/// APPEND-ONLY SMS-credit ledger (metering doc §6, §7.4) — the money-critical
+/// table. Balance = SUM(amount) per scope. Reserve-then-commit, refund-on-
+/// failure. Every movement carries an idempotency key tied to its origin (an
+/// outbox row or a gateway txn) so retries never double-charge. A DB trigger
+/// blocks UPDATE/DELETE — same discipline as audit_event.
+model SmsCreditLedger {
+  id             String        @id @default(uuid()) @db.Uuid
+  /// The billing scope holding the balance (event OR account).
+  eventId        String?       @map("event_id") @db.Uuid
+  accountId      String?       @map("account_id") @db.Uuid
+  kind           SmsLedgerKind
+  /// Signed minor-unit credit count: +grant/+refund, −reserve, 0 commit.
+  amount         Int
+  /// Ties the movement to its origin; unique so a retry is a no-op.
+  idempotencyKey String        @unique @map("idempotency_key")
+  reference      String?
+  createdAt      DateTime      @default(now()) @map("created_at")
+
+  @@index([eventId])
+  @@index([accountId])
+  @@map("sms_credit_ledger")
+}
+
+/// A SaaS-fee charge + its settlement (metering doc §7.1, §8). Created PENDING
+/// when a collection is initiated; flipped to PAID ONLY by the idempotent
+/// payment webhook (never the client), keyed on the gateway transaction id.
+model Invoice {
+  id                   String        @id @default(uuid()) @db.Uuid
+  billingAccountId     String        @map("billing_account_id") @db.Uuid
+  planId               String?       @map("plan_id") @db.Uuid
+  /// The scope this charge will grant to on payment (event OR account).
+  eventId              String?       @map("event_id") @db.Uuid
+  amountMinor          BigInt        @map("amount_minor")
+  currency             String        @default("UGX")
+  status               InvoiceStatus @default(PENDING)
+  /// Our reference, echoed by the gateway webhook for reconciliation.
+  reference            String        @unique
+  /// The gateway's transaction id; unique so a duplicate webhook can't
+  /// double-apply a grant (metering doc §7.4).
+  gatewayTransactionId String?       @unique @map("gateway_transaction_id")
+  createdAt            DateTime      @default(now()) @map("created_at")
+  updatedAt            DateTime      @updatedAt @map("updated_at")
+
+  account BillingAccount @relation(fields: [billingAccountId], references: [id], onDelete: Cascade)
+  plan    Plan?          @relation(fields: [planId], references: [id])
+
+  @@index([billingAccountId])
+  @@map("invoice")
+}
+
+// ─── Communications (blueprint §2.4 — SMS reminders & announcements) ──────────
+
+/// A batch of outbound SMS (a reminder blast or an announcement broadcast). The
+/// per-message rows carry the real delivery state; this groups them and records
+/// what was sent and to how many, for "who did/didn't receive it" (§34).
+model SmsCampaign {
+  id             String            @id @default(uuid()) @db.Uuid
+  eventId        String            @map("event_id") @db.Uuid
+  kind           SmsCampaignKind
+  /// The message template/body the organizer approved.
+  body           String
+  status         SmsCampaignStatus @default(QUEUED)
+  recipientCount Int               @default(0) @map("recipient_count")
+  createdById    String?           @map("created_by") @db.Uuid
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+
+  event    Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  messages SmsMessage[]
+
+  @@index([eventId])
+  @@map("sms_campaign")
+}
+
+/// One outbound SMS. Holds a RESERVED SMS credit while QUEUED (metering §6): the
+/// worker sends via the provider, then COMMITS the credit on success or REFUNDS
+/// it on failure — a failed SMS never costs the user a credit. `reserveKey` ties
+/// the message to its credit-ledger reservation; idempotent on redelivery.
+model SmsMessage {
+  id                String    @id @default(uuid()) @db.Uuid
+  eventId           String    @map("event_id") @db.Uuid
+  campaignId        String?   @map("campaign_id") @db.Uuid
+  personId          String?   @map("person_id") @db.Uuid
+  /// Recipient number. PII — never logged (§3.10).
+  toPhone           String    @map("to_phone")
+  body              String
+  status            SmsStatus @default(QUEUED)
+  segments          Int       @default(1)
+  providerMessageId String?   @map("provider_message_id")
+  /// Idempotency key for the reserved credit (`sms:<messageId>`).
+  reserveKey        String    @map("reserve_key")
+  error             String?
+  sentAt            DateTime? @map("sent_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  event    Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  campaign SmsCampaign? @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  person   Person?      @relation(fields: [personId], references: [id])
+
+  @@index([eventId])
+  @@index([campaignId])
+  @@index([eventId, status])
+  @@map("sms_message")
+}
+
+// ─── Phase 0 marker (harmless; predates the domain) ──────────────────────────
+
+model SchemaHealth {
+  id        String   @id @default(uuid()) @db.Uuid
+  note      String   @default("akabbo schema ok")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("_schema_health")
+}

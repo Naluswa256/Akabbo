@@ -1,0 +1,50 @@
+/** @type {import('ts-jest').JestConfigWithTsJest} */
+module.exports = {
+  moduleFileExtensions: ['js', 'json', 'ts'],
+  rootDir: '.',
+  testRegex: '.*\\.spec\\.ts$',
+  transform: {
+    '^.+\\.(t|j)s$': [
+      'ts-jest',
+      {
+        tsconfig: 'tsconfig.json',
+      },
+    ],
+  },
+  collectCoverageFrom: ['apps/**/*.(t|j)s', 'libs/**/*.(t|j)s'],
+  coveragePathIgnorePatterns: ['/node_modules/', '\\.spec\\.ts$', 'main\\.ts$'],
+  coverageDirectory: './coverage',
+  testEnvironment: 'node',
+  testTimeout: 30000,
+  // Integration specs share one Postgres and TRUNCATE between tests; run serially
+  // so concurrent workers don't clobber each other's data.
+  maxWorkers: 1,
+  moduleNameMapper: {
+    '^@akabbo/config$': '<rootDir>/libs/config/src',
+    '^@akabbo/config/(.*)$': '<rootDir>/libs/config/src/$1',
+    '^@akabbo/logging$': '<rootDir>/libs/logging/src',
+    '^@akabbo/logging/(.*)$': '<rootDir>/libs/logging/src/$1',
+    '^@akabbo/observability$': '<rootDir>/libs/observability/src',
+    '^@akabbo/observability/(.*)$': '<rootDir>/libs/observability/src/$1',
+    '^@akabbo/prisma$': '<rootDir>/libs/prisma/src',
+    '^@akabbo/prisma/(.*)$': '<rootDir>/libs/prisma/src/$1',
+    '^@akabbo/providers$': '<rootDir>/libs/providers/src',
+    '^@akabbo/providers/(.*)$': '<rootDir>/libs/providers/src/$1',
+    '^@akabbo/access$': '<rootDir>/libs/access/src',
+    '^@akabbo/access/(.*)$': '<rootDir>/libs/access/src/$1',
+    '^@akabbo/identity$': '<rootDir>/libs/identity/src',
+    '^@akabbo/identity/(.*)$': '<rootDir>/libs/identity/src/$1',
+    '^@akabbo/ledger$': '<rootDir>/libs/ledger/src',
+    '^@akabbo/ledger/(.*)$': '<rootDir>/libs/ledger/src/$1',
+    '^@akabbo/ai$': '<rootDir>/libs/ai/src',
+    '^@akabbo/ai/(.*)$': '<rootDir>/libs/ai/src/$1',
+    '^@akabbo/documents$': '<rootDir>/libs/documents/src',
+    '^@akabbo/documents/(.*)$': '<rootDir>/libs/documents/src/$1',
+    '^@akabbo/transparency$': '<rootDir>/libs/transparency/src',
+    '^@akabbo/transparency/(.*)$': '<rootDir>/libs/transparency/src/$1',
+    '^@akabbo/billing$': '<rootDir>/libs/billing/src',
+    '^@akabbo/billing/(.*)$': '<rootDir>/libs/billing/src/$1',
+    '^@akabbo/comms$': '<rootDir>/libs/comms/src',
+    '^@akabbo/comms/(.*)$': '<rootDir>/libs/comms/src/$1',
+  },
+};

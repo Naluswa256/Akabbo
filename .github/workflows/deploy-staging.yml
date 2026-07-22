@@ -1,0 +1,105 @@
+name: Deploy (staging)
+
+# Builds the image, pushes to Artifact Registry, runs migrations as a one-shot
+# Cloud Run Job with Cloud SQL proxy, then deploys the api + worker Cloud Run
+# services. Gated on repo variables (GCP_PROJECT_ID). If absent the job is
+# skipped, so a fork or unconfigured repo never fails on deploy.
+#
+# Cloud SQL connection: Cloud Run services use the built-in Cloud SQL Auth Proxy
+# (unix socket via run.googleapis.com/cloudsql-instances annotation).
+# The migration job uses DIRECT_URL (public IP) with SSL.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Build · Migrate · Deploy
+    runs-on: ubuntu-latest
+    # Only run when GCP auth is configured.
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.GCP_PROJECT_ID != '' }}
+    permissions:
+      contents: read
+      id-token: write # for Workload Identity Federation
+    env:
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GCP_REGION: ${{ vars.GCP_REGION }}
+      IMAGE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/akabbo/akabbo:${{ github.sha }}
+      CLOUD_RUN_SA: akabbo-cloudrun@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com
+      SQL_INSTANCE: ${{ vars.GCP_PROJECT_ID }}:${{ vars.GCP_REGION }}:akabbo-staging
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
+
+      - name: Build and push image
+        run: |
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+
+      - name: Run database migrations (one-shot Cloud Run Job)
+        # The migration job uses DIRECT_URL (Cloud SQL public IP with SSL) because
+        # the Cloud Run Job needs Cloud SQL proxy for socket access, but prisma migrate
+        # also works with direct IP+SSL. We use DIRECT_URL for the migration job.
+        run: |
+          gcloud run jobs deploy akabbo-migrate \
+            --image "$IMAGE" \
+            --region "$GCP_REGION" \
+            --service-account "$CLOUD_RUN_SA" \
+            --add-cloudsql-instances "$SQL_INSTANCE" \
+            --command node \
+            --args "node_modules/prisma/build/index.js,migrate,deploy" \
+            --set-secrets "DATABASE_URL=akabbo-direct-url:latest,DIRECT_URL=akabbo-direct-url:latest" \
+            --max-retries 1 --quiet
+          gcloud run jobs execute akabbo-migrate --region "$GCP_REGION" --wait
+
+      - name: Deploy API service
+        run: |
+          gcloud run deploy akabbo-api \
+            --image "$IMAGE" \
+            --region "$GCP_REGION" \
+            --platform managed \
+            --allow-unauthenticated \
+            --service-account "$CLOUD_RUN_SA" \
+            --add-cloudsql-instances "$SQL_INSTANCE" \
+            --set-env-vars "APP_ROLE=api,NODE_ENV=production,LOG_LEVEL=info,STORAGE_PROVIDER=gcs,GCS_BUCKET=akabbo-staging-documents,GCS_SERVICE_ACCOUNT_EMAIL=${CLOUD_RUN_SA},SMS_PROVIDER=ugsms,UGSMS_BASE_URL=https://ugsms.com/api/v2,UGSMS_SENDER_ID=AKABBO,PAYMENT_PROVIDER=muda,MUDA_BASE_URL=https://api.muda.tech/v1" \
+            --set-secrets "DATABASE_URL=akabbo-database-url:latest,DIRECT_URL=akabbo-direct-url:latest,JWT_SECRET=akabbo-jwt-secret:latest,UGSMS_API_KEY=akabbo-ugsms-api-key:latest,MUDA_CLIENT_ID=akabbo-muda-client-id:latest,MUDA_CLIENT_SECRET=akabbo-muda-client-secret:latest,MUDA_OAUTH_URL=akabbo-muda-oauth-url:latest,MUDA_WEBHOOK_SECRET=akabbo-muda-webhook-secret:latest,SENTRY_DSN=akabbo-sentry-dsn:latest" \
+            --min-instances 0 \
+            --max-instances 4 \
+            --quiet
+
+      - name: Deploy worker service
+        run: |
+          gcloud run deploy akabbo-worker \
+            --image "$IMAGE" \
+            --region "$GCP_REGION" \
+            --platform managed \
+            --no-cpu-throttling \
+            --min-instances 1 --max-instances 1 \
+            --ingress internal \
+            --service-account "$CLOUD_RUN_SA" \
+            --add-cloudsql-instances "$SQL_INSTANCE" \
+            --set-env-vars "APP_ROLE=worker,NODE_ENV=production,LOG_LEVEL=info,WORKER_HEARTBEAT_MS=15000,STORAGE_PROVIDER=gcs,GCS_BUCKET=akabbo-staging-documents,GCS_SERVICE_ACCOUNT_EMAIL=${CLOUD_RUN_SA},SMS_PROVIDER=ugsms,UGSMS_BASE_URL=https://ugsms.com/api/v2,UGSMS_SENDER_ID=AKABBO,PAYMENT_PROVIDER=muda,MUDA_BASE_URL=https://api.muda.tech/v1" \
+            --set-secrets "DATABASE_URL=akabbo-database-url:latest,DIRECT_URL=akabbo-direct-url:latest,JWT_SECRET=akabbo-jwt-secret:latest,UGSMS_API_KEY=akabbo-ugsms-api-key:latest,MUDA_CLIENT_ID=akabbo-muda-client-id:latest,MUDA_CLIENT_SECRET=akabbo-muda-client-secret:latest,MUDA_OAUTH_URL=akabbo-muda-oauth-url:latest,MUDA_WEBHOOK_SECRET=akabbo-muda-webhook-secret:latest,SENTRY_DSN=akabbo-sentry-dsn:latest" \
+            --quiet
+
+      - name: Smoke-test API health
+        run: |
+          URL=$(gcloud run services describe akabbo-api --region "$GCP_REGION" --format='value(status.url)')
+          echo "Probing $URL/health"
+          curl --fail --retry 5 --retry-delay 3 "$URL/health"
+          echo "Probing $URL/health/ready"
+          curl --fail --retry 5 --retry-delay 3 "$URL/health/ready"

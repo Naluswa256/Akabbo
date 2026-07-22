@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Lint · Typecheck · Test · Migrate
+    runs-on: ubuntu-latest
+
+    # Ephemeral Postgres so `prisma migrate deploy` proves migrations run
+    # cleanly forward (Phase 0 DoD) without touching Neon.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: akabbo
+          POSTGRES_PASSWORD: akabbo
+          POSTGRES_DB: akabbo_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U akabbo"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Owner/superuser URL — runs migrations and creates the app role.
+      OWNER_DATABASE_URL: postgresql://akabbo:akabbo@localhost:5432/akabbo_ci?sslmode=disable
+      # Least-privilege app role — used at test runtime so RLS actually applies
+      # (a superuser would bypass RLS and mask the isolation tests).
+      APP_DATABASE_URL: postgresql://akabbo_app:akabbo_app@localhost:5432/akabbo_ci?sslmode=disable
+      # Default for schema-only steps (generate/validate); real steps override.
+      DATABASE_URL: postgresql://akabbo:akabbo@localhost:5432/akabbo_ci?sslmode=disable
+      DIRECT_URL: postgresql://akabbo:akabbo@localhost:5432/akabbo_ci?sslmode=disable
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.18.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm prisma:generate
+
+      - name: Validate Prisma schema
+        run: pnpm prisma:validate
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Format check
+        run: pnpm format:check
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      # Migrations must run BEFORE tests (the integration suite needs the
+      # schema) and prove they apply cleanly forward. Run as the owner.
+      - name: Apply migrations (forward-only check)
+        run: pnpm prisma:migrate:deploy
+        env:
+          DATABASE_URL: ${{ env.OWNER_DATABASE_URL }}
+          DIRECT_URL: ${{ env.OWNER_DATABASE_URL }}
+
+      # Create the least-privilege app role + grants (RLS applies to it).
+      - name: Provision app role
+        run: pnpm prisma db execute --url "$OWNER_DATABASE_URL" --file scripts/setup-app-role.sql
+
+      - name: Unit + integration tests
+        run: pnpm test
+        env:
+          NODE_ENV: test
+          # Connect as the non-superuser app role so RLS isolation is real.
+          DATABASE_URL: ${{ env.APP_DATABASE_URL }}
+          DIRECT_URL: ${{ env.APP_DATABASE_URL }}
+          JWT_SECRET: ci-test-secret-at-least-16-chars
+
+      - name: Build (api + worker)
+        run: pnpm build

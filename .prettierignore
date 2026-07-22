@@ -1,0 +1,6 @@
+dist/
+node_modules/
+coverage/
+**/generated/
+libs/prisma/src/generated/
+pnpm-lock.yaml

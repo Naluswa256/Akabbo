@@ -1,0 +1,107 @@
+# Cloud Run service — Akabbo worker (staging).
+# The worker has no HTTP server. To keep it always-on (draining outbox, running
+# schedules) set minScale=1 and CPU always-allocated. It needs the same secrets
+# as the API (sends SMS via outbox, accesses DB, writes audit).
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: akabbo-worker
+  labels:
+    app: akabbo
+    role: worker
+  annotations:
+    run.googleapis.com/ingress: internal
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: '1'
+        autoscaling.knative.dev/maxScale: '1'
+        run.googleapis.com/cpu-throttling: 'false'
+        # Cloud SQL Auth Proxy connection (Unix socket).
+        run.googleapis.com/cloudsql-instances: PROJECT_ID:europe-west1:akabbo-staging
+    spec:
+      serviceAccountName: akabbo-cloudrun@PROJECT_ID.iam.gserviceaccount.com
+      containers:
+        - image: europe-west1-docker.pkg.dev/PROJECT_ID/akabbo/akabbo:latest
+          env:
+            - name: APP_ROLE
+              value: worker
+            - name: NODE_ENV
+              value: production
+            - name: LOG_LEVEL
+              value: info
+            - name: WORKER_HEARTBEAT_MS
+              value: '15000'
+            # --- Storage ---
+            - name: STORAGE_PROVIDER
+              value: gcs
+            - name: GCS_BUCKET
+              value: akabbo-staging-documents
+            - name: GCS_SERVICE_ACCOUNT_EMAIL
+              value: akabbo-cloudrun@PROJECT_ID.iam.gserviceaccount.com
+            # --- Provider selectors ---
+            - name: SMS_PROVIDER
+              value: ugsms
+            - name: PAYMENT_PROVIDER
+              value: muda
+            # --- UGSMS (SMS) ---
+            - name: UGSMS_BASE_URL
+              value: https://ugsms.com/api/v2
+            - name: UGSMS_SENDER_ID
+              value: AKABBO
+            # --- Secrets from Secret Manager ---
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: akabbo-database-url
+                  key: latest
+            - name: DIRECT_URL
+              valueFrom:
+                secretKeyRef:
+                  name: akabbo-direct-url
+                  key: latest
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: akabbo-jwt-secret
+                  key: latest
+            - name: UGSMS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: akabbo-ugsms-api-key
+                  key: latest
+            - name: MUDA_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: akabbo-muda-client-id
+                  key: latest
+            - name: MUDA_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: akabbo-muda-client-secret
+                  key: latest
+            - name: MUDA_OAUTH_URL
+              valueFrom:
+                secretKeyRef:
+                  name: akabbo-muda-oauth-url
+                  key: latest
+            - name: MUDA_BASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: akabbo-muda-base-url
+                  key: latest
+            - name: MUDA_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: akabbo-muda-webhook-secret
+                  key: latest
+            - name: SENTRY_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: akabbo-sentry-dsn
+                  key: latest
+          resources:
+            limits:
+              cpu: '1'
+              memory: 512Mi

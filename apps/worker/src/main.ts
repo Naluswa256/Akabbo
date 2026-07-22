@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { createServer } from 'node:http';
 import { NestFactory } from '@nestjs/core';
 import { Logger as PinoLogger } from 'nestjs-pino';
 import { validateEnv } from '@akabbo/config';
@@ -8,9 +9,9 @@ import { WorkerModule } from './worker.module';
 /**
  * Worker process entrypoint.
  *
- * Runs as a Nest application context (no HTTP server) — it drains work and runs
- * schedules, it does not serve requests. Shutdown hooks ensure the heartbeat
- * timer and DB connection close cleanly on SIGTERM (Cloud Run sends SIGTERM).
+ * Runs as a Nest application context — it drains work and runs schedules.
+ * Binds a lightweight HTTP listener on process.env.PORT for Cloud Run container
+ * port health probing. Shutdown hooks ensure clean termination on SIGTERM.
  */
 async function bootstrap(): Promise<void> {
   const env = validateEnv();
@@ -28,8 +29,16 @@ async function bootstrap(): Promise<void> {
   app.useLogger(app.get(PinoLogger));
   app.enableShutdownHooks();
 
+  // Cloud Run requires container processes deployed as services to bind to $PORT.
+  const port = env.PORT ?? 8080;
+  const healthServer = createServer((_req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok', role: 'worker' }));
+  });
+  healthServer.listen(port, '0.0.0.0');
+
   const logger = app.get(PinoLogger);
-  logger.log(`Akabbo worker started (env=${env.NODE_ENV})`);
+  logger.log(`Akabbo worker started (env=${env.NODE_ENV}, port=${port})`);
 }
 
 bootstrap().catch(async (err) => {

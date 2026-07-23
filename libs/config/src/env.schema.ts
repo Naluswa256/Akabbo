@@ -80,7 +80,7 @@ export const envSchema = z
     // collections). Keys optional so the app boots on the stub.
     PAYMENT_PROVIDER: z.string().default('stub'),
     MUDA_BASE_URL: z.string().default('https://api.muda.tech/v1'),
-    MUDA_OAUTH_URL: z.string().default(''),
+    MUDA_OAUTH_URL: z.string().default('https://api.muda.tech/v1/clients/oauth/token'),
     MUDA_CLIENT_ID: z.string().default(''),
     MUDA_CLIENT_SECRET: z.string().default(''),
     MUDA_COLLECTION_PRODUCT_ID: z.coerce.number().default(10012),

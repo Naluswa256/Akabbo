@@ -48,32 +48,38 @@ export class MudaTechProvider implements PaymentProvider {
     if (request.channel !== 'mobile_money' || !request.phone) {
       throw new Error('Muda collection requires a mobile_money channel and a payer phone');
     }
-    const token = await this.getToken();
-    const res = await fetch(`${this.config.baseUrl}/payment/direct-collection`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({
-        product_id: this.config.collectionProductId,
-        phone: request.phone,
-        amount: String(request.amount),
-        currency: request.currency,
-        reference_id: request.reference,
-        trans_type: 'PULL',
-      }),
-    });
-    const body = (await res.json().catch(() => ({}))) as MudaCollectionResponse;
+    try {
+      const token = await this.getToken();
+      const res = await fetch(`${this.config.baseUrl}/payment/direct-collection`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          product_id: this.config.collectionProductId,
+          phone: request.phone,
+          amount: String(request.amount),
+          currency: request.currency,
+          reference_id: request.reference,
+          trans_type: 'PULL',
+        }),
+      });
+      const body = (await res.json().catch(() => ({}))) as MudaCollectionResponse;
 
-    // Muda may return HTTP 200 with a non-2xx status IN THE BODY.
-    const bodyStatus = body.status;
-    if (!res.ok || (typeof bodyStatus === 'number' && (bodyStatus < 200 || bodyStatus >= 300))) {
-      const message = body.message ?? `HTTP ${res.status}`;
-      this.logger.error(`Muda collection failed (ref=${request.reference}): ${message}`);
+      // Muda may return HTTP 200 with a non-2xx status IN THE BODY.
+      const bodyStatus = body.status;
+      if (!res.ok || (typeof bodyStatus === 'number' && (bodyStatus < 200 || bodyStatus >= 300))) {
+        const message = body.message ?? `HTTP ${res.status}`;
+        this.logger.error(`Muda collection failed (ref=${request.reference}): ${message}`);
+        return { providerChargeId: '', status: 'failed' };
+      }
+
+      const trans_id = body.data?.trans_id ?? body.data?.transaction_id ?? '';
+      this.logger.log(`Muda collection submitted: trans_id=${trans_id} ref=${request.reference}`);
+      return { providerChargeId: trans_id, status: 'pending' };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.error(`Muda collection exception (ref=${request.reference}): ${msg}`);
       return { providerChargeId: '', status: 'failed' };
     }
-
-    const trans_id = body.data?.trans_id ?? body.data?.transaction_id ?? '';
-    this.logger.log(`Muda collection submitted: trans_id=${trans_id} ref=${request.reference}`);
-    return { providerChargeId: trans_id, status: 'pending' };
   }
 
   /**
@@ -131,17 +137,24 @@ export class MudaTechProvider implements PaymentProvider {
     if (this.token && Date.now() < this.token.expiresAt) return this.token.value;
     const res = await fetch(this.config.oauthUrl, {
       method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'client_credentials',
-        client_id: this.config.clientId,
-        client_secret: this.config.clientSecret,
-      }).toString(),
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        api_key: this.config.clientId,
+        secret_key: this.config.clientSecret,
+      }),
     });
     if (!res.ok) throw new Error(`Muda OAuth failed (${res.status})`);
-    const json = (await res.json()) as { access_token: string; expires_in?: number };
-    const ttlMs = (json.expires_in ?? 3600) * 1000;
-    this.token = { value: json.access_token, expiresAt: Date.now() + ttlMs - 60_000 };
+    const json = (await res.json()) as {
+      access_token?: string;
+      expires_in?: number;
+      data?: { access_token?: string; expires_in?: number };
+    };
+    const accessToken = json.data?.access_token ?? json.access_token;
+    const expiresIn = json.data?.expires_in ?? json.expires_in ?? 21600;
+    if (!accessToken) throw new Error('Muda OAuth failed: missing access_token in response');
+
+    const ttlMs = expiresIn * 1000;
+    this.token = { value: accessToken, expiresAt: Date.now() + ttlMs - 60_000 };
     return this.token.value;
   }
 }

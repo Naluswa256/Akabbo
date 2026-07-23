@@ -75,7 +75,7 @@ function buildPaymentProvider(config: AppConfigService): PaymentProvider {
   if (config.get('PAYMENT_PROVIDER') !== 'muda') return new StubPaymentProvider();
   const clientId = config.get('MUDA_CLIENT_ID');
   const clientSecret = config.get('MUDA_CLIENT_SECRET');
-  const oauthUrl = config.get('MUDA_OAUTH_URL');
+  const oauthUrl = config.get('MUDA_OAUTH_URL') || `${config.get('MUDA_BASE_URL')}/clients/oauth/token`;
   if (!clientId || !clientSecret || !oauthUrl) return new StubPaymentProvider();
   return new MudaTechProvider({
     baseUrl: config.get('MUDA_BASE_URL'),

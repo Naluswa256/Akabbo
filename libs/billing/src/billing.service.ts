@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { BadRequestException, Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, BadGatewayException, Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { GrantStatus, InvoiceStatus, SmsLedgerKind, AiLedgerKind } from '@prisma/client';
 import { EntitlementScope, EntitlementService, ResolvedEntitlement } from '@akabbo/access';
 import { PrismaService } from '@akabbo/prisma';
@@ -179,6 +179,13 @@ export class BillingService implements OnModuleInit {
       phone,
       description: `Akabbo ${plan.name}`,
     });
+
+    if (charge.status === 'failed') {
+      throw new BadGatewayException(
+        'Payment collection could not be initiated at this time. Please check your phone number or try again.',
+      );
+    }
+
     return { invoiceId: invoice.id, reference, charge };
   }
 

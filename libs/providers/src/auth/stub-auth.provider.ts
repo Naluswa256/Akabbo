@@ -4,6 +4,7 @@ import {
   AuthenticatedActor,
   AuthProvider,
   AuthSession,
+  RefreshTokenRequest,
   StartOtpRequest,
   StartOtpResult,
   VerifyOtpRequest,
@@ -20,6 +21,10 @@ export class StubAuthProvider implements AuthProvider {
 
   verifyOtp(_request: VerifyOtpRequest): Promise<AuthSession> {
     throw new ProviderNotImplementedError('AuthProvider', 'verifyOtp', 'Phase 1');
+  }
+
+  refreshToken(_request: RefreshTokenRequest): Promise<AuthSession> {
+    throw new ProviderNotImplementedError('AuthProvider', 'refreshToken', 'Phase 1');
   }
 
   verifyAccessToken(_token: string): Promise<AuthenticatedActor | null> {

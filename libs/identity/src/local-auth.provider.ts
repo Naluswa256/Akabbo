@@ -13,6 +13,7 @@ import {
   AuthenticatedActor,
   AuthProvider,
   AuthSession,
+  RefreshTokenRequest,
   SMS_PROVIDER,
   SmsProvider,
   StartOtpRequest,
@@ -22,9 +23,16 @@ import {
 import { UserService } from './user.service';
 import { generateOtp, hashOtp, verifyOtp } from './otp.util';
 
-interface JwtPayload {
+interface AccessJwtPayload {
   sub: string;
   pv: boolean;
+  type?: 'access';
+}
+
+interface RefreshJwtPayload {
+  sub: string;
+  pv: boolean;
+  type: 'refresh';
 }
 
 /**
@@ -109,9 +117,33 @@ export class LocalAuthProvider implements AuthProvider {
     return this.issueSession(user.id, true);
   }
 
+  async refreshToken(request: RefreshTokenRequest): Promise<AuthSession> {
+    const secret = this.config.get('JWT_SECRET');
+    let payload: RefreshJwtPayload;
+    try {
+      payload = jwt.verify(request.refreshToken, secret) as RefreshJwtPayload;
+    } catch {
+      throw new UnauthorizedException('Invalid or expired refresh token');
+    }
+
+    if (payload.type !== 'refresh') {
+      throw new UnauthorizedException('Invalid token type for refresh');
+    }
+
+    const user = await this.prisma.user.findUnique({ where: { id: payload.sub } });
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    return this.issueSession(user.id, user.phoneVerified);
+  }
+
   verifyAccessToken(token: string): Promise<AuthenticatedActor | null> {
     try {
-      const payload = jwt.verify(token, this.config.get('JWT_SECRET')) as JwtPayload;
+      const payload = jwt.verify(token, this.config.get('JWT_SECRET')) as AccessJwtPayload;
+      if (payload.type && payload.type !== 'access') {
+        return Promise.resolve(null);
+      }
       return Promise.resolve({ userId: payload.sub, phoneVerified: payload.pv });
     } catch {
       // Invalid/expired token → unauthenticated (never a trusted default).
@@ -121,11 +153,19 @@ export class LocalAuthProvider implements AuthProvider {
 
   private issueSession(userId: string, phoneVerified: boolean): AuthSession {
     const ttl = this.config.get('JWT_TTL_SECONDS');
-    const payload: JwtPayload = { sub: userId, pv: phoneVerified };
-    const accessToken = jwt.sign(payload, this.config.get('JWT_SECRET'), { expiresIn: ttl });
+    const refreshTtl = this.config.get('JWT_REFRESH_TTL_SECONDS');
+    const secret = this.config.get('JWT_SECRET');
+
+    const accessPayload: AccessJwtPayload = { sub: userId, pv: phoneVerified, type: 'access' };
+    const accessToken = jwt.sign(accessPayload, secret, { expiresIn: ttl });
+
+    const refreshPayload: RefreshJwtPayload = { sub: userId, pv: phoneVerified, type: 'refresh' };
+    const refreshToken = jwt.sign(refreshPayload, secret, { expiresIn: refreshTtl });
+
     return {
       userId,
       accessToken,
+      refreshToken,
       expiresAt: new Date(Date.now() + ttl * 1000),
     };
   }

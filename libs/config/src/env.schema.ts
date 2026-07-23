@@ -45,6 +45,7 @@ export const envSchema = z
     // Signs session JWTs. MUST be overridden in production (guarded below).
     JWT_SECRET: z.string().min(16).default(DEV_JWT_SECRET),
     JWT_TTL_SECONDS: z.coerce.number().int().positive().default(3600),
+    JWT_REFRESH_TTL_SECONDS: z.coerce.number().int().positive().default(2592000),
     OTP_TTL_SECONDS: z.coerce.number().int().positive().default(300),
     OTP_MAX_ATTEMPTS: z.coerce.number().int().positive().default(5),
     // Dev-only convenience: return the OTP code in the API response instead of

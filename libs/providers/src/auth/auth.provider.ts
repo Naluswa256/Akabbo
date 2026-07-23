@@ -35,7 +35,13 @@ export interface AuthSession {
   userId: string;
   /** Signed token the client presents on subsequent requests. */
   accessToken: string;
+  /** Long-lived signed refresh token used to request new access tokens. */
+  refreshToken: string;
   expiresAt: Date;
+}
+
+export interface RefreshTokenRequest {
+  refreshToken: string;
 }
 
 /** The verified identity extracted from a presented access token. */
@@ -47,6 +53,7 @@ export interface AuthenticatedActor {
 export interface AuthProvider {
   startOtp(request: StartOtpRequest): Promise<StartOtpResult>;
   verifyOtp(request: VerifyOtpRequest): Promise<AuthSession>;
+  refreshToken(request: RefreshTokenRequest): Promise<AuthSession>;
   /**
    * Validate a presented access token and return the actor, or null if the
    * token is invalid/expired. Callers MUST treat null as "unauthenticated",

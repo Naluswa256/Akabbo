@@ -15,3 +15,8 @@ export class VerifyOtpDto {
   @Length(4, 8)
   code!: string;
 }
+
+export class RefreshTokenDto {
+  @IsString()
+  refreshToken!: string;
+}

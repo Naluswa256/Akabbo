@@ -76,7 +76,7 @@ jobs:
             --allow-unauthenticated \
             --service-account "$CLOUD_RUN_SA" \
             --set-cloudsql-instances "$SQL_INSTANCE" \
-            --set-env-vars "APP_ROLE=api,NODE_ENV=production,LOG_LEVEL=info,AUTH_EXPOSE_OTP=false,LLM_PROVIDER=gemini,STORAGE_PROVIDER=gcs,GCS_BUCKET=akabbo-staging-documents,GCS_SERVICE_ACCOUNT_EMAIL=${CLOUD_RUN_SA},SMS_PROVIDER=ugsms,UGSMS_BASE_URL=https://ugsms.com/api/v2,UGSMS_SENDER_ID=AKABBO,PAYMENT_PROVIDER=muda,MUDA_BASE_URL=https://api.muda.tech/v1" \
+            --set-env-vars "APP_ROLE=api,NODE_ENV=production,LOG_LEVEL=info,AUTH_EXPOSE_OTP=false,LLM_PROVIDER=gemini,STORAGE_PROVIDER=gcs,GCS_BUCKET=akabbo-staging-documents,GCS_SERVICE_ACCOUNT_EMAIL=${CLOUD_RUN_SA},SMS_PROVIDER=ugsms,UGSMS_BASE_URL=https://ugsms.com/api/v2,UGSMS_SENDER_ID=AKABBO,PAYMENT_PROVIDER=muda,MUDA_BASE_URL=https://api.muda.tech/v1,ADMIN_SECRET=akabbo-admin-secret-prod-2026" \
             --set-secrets "DATABASE_URL=akabbo-database-url:latest,DIRECT_URL=akabbo-database-url:latest,JWT_SECRET=akabbo-jwt-secret:latest,GEMINI_API_KEY=akabbo-gemini-api-key:latest,UGSMS_API_KEY=akabbo-ugsms-api-key:latest,MUDA_CLIENT_ID=akabbo-muda-client-id:latest,MUDA_CLIENT_SECRET=akabbo-muda-client-secret:latest,MUDA_OAUTH_URL=akabbo-muda-oauth-url:latest,MUDA_WEBHOOK_SECRET=akabbo-muda-webhook-secret:latest,SENTRY_DSN=akabbo-sentry-dsn:latest" \
             --min-instances 0 \
             --max-instances 4 \
@@ -93,7 +93,7 @@ jobs:
             --ingress internal \
             --service-account "$CLOUD_RUN_SA" \
             --set-cloudsql-instances "$SQL_INSTANCE" \
-            --set-env-vars "APP_ROLE=worker,NODE_ENV=production,LOG_LEVEL=info,AUTH_EXPOSE_OTP=false,WORKER_HEARTBEAT_MS=15000,LLM_PROVIDER=gemini,STORAGE_PROVIDER=gcs,GCS_BUCKET=akabbo-staging-documents,GCS_SERVICE_ACCOUNT_EMAIL=${CLOUD_RUN_SA},SMS_PROVIDER=ugsms,UGSMS_BASE_URL=https://ugsms.com/api/v2,UGSMS_SENDER_ID=AKABBO,PAYMENT_PROVIDER=muda,MUDA_BASE_URL=https://api.muda.tech/v1" \
+            --set-env-vars "APP_ROLE=worker,NODE_ENV=production,LOG_LEVEL=info,AUTH_EXPOSE_OTP=false,WORKER_HEARTBEAT_MS=15000,LLM_PROVIDER=gemini,STORAGE_PROVIDER=gcs,GCS_BUCKET=akabbo-staging-documents,GCS_SERVICE_ACCOUNT_EMAIL=${CLOUD_RUN_SA},SMS_PROVIDER=ugsms,UGSMS_BASE_URL=https://ugsms.com/api/v2,UGSMS_SENDER_ID=AKABBO,PAYMENT_PROVIDER=muda,MUDA_BASE_URL=https://api.muda.tech/v1,ADMIN_SECRET=akabbo-admin-secret-prod-2026" \
             --set-secrets "DATABASE_URL=akabbo-database-url:latest,DIRECT_URL=akabbo-database-url:latest,JWT_SECRET=akabbo-jwt-secret:latest,GEMINI_API_KEY=akabbo-gemini-api-key:latest,UGSMS_API_KEY=akabbo-ugsms-api-key:latest,MUDA_CLIENT_ID=akabbo-muda-client-id:latest,MUDA_CLIENT_SECRET=akabbo-muda-client-secret:latest,MUDA_OAUTH_URL=akabbo-muda-oauth-url:latest,MUDA_WEBHOOK_SECRET=akabbo-muda-webhook-secret:latest,SENTRY_DSN=akabbo-sentry-dsn:latest" \
             --quiet
 

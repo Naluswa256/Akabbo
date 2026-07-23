@@ -73,64 +73,68 @@ export class DynamicContextService {
     }
   }
 
-  /** Seed curated Ugandan cold-start domain exemplars as pre-APPROVED on launch. */
+  /** Seed curated Ugandan cold-start domain exemplars as pre-APPROVED on launch. Fail-safe so container boot never crashes. */
   async seedInitialExemplars(): Promise<void> {
-    const count = await this.prisma.aiLearnedExemplar.count();
-    if (count > 0) return;
+    try {
+      const count = await this.prisma.aiLearnedExemplar.count();
+      if (count > 0) return;
 
-    await this.prisma.aiLearnedExemplar.createMany({
-      data: [
-        {
-          category: 'KWANJULA_CULTURAL_GIFTS',
-          triggerKeywords: ['kwanjula', 'amakanzu', 'omutwalo', 'ebibo', 'amajani', 'mutwalo'],
-          userPromptPattern: 'Extract budget items for Kwanjula',
-          learnedGuidance:
-            'When users upload or mention Kwanjula items (Amakanzu, Omutwalo, Ebibo, Amajani), group them under Cultural Introduction Budget items.',
-          confidenceScore: 1.0,
-          occurrenceCount: 5,
-          status: 'APPROVED',
-        },
-        {
-          category: 'FUNERAL_MABEGO_RAISING',
-          triggerKeywords: ['funeral', 'burial', 'mabego', 'condolence', 'vigil'],
-          userPromptPattern: 'Funeral / Mabego contribution tracking',
-          learnedGuidance:
-            'For funeral (Mabego) events, prioritize rapid contribution recording and generate public transparency dashboard links.',
-          confidenceScore: 1.0,
-          occurrenceCount: 5,
-          status: 'APPROVED',
-        },
-        {
-          category: 'MOMO_SCREENSHOT_RECEIPT',
-          triggerKeywords: ['momo', 'screenshot', 'mobile money', 'mtn', 'airtel', 'receipt'],
-          userPromptPattern: 'Extract Mobile Money contribution screenshot',
-          learnedGuidance:
-            'When a Mobile Money receipt/screenshot is uploaded, extract the sender name, transaction ID, and amount, then stage for confirmation.',
-          confidenceScore: 1.0,
-          occurrenceCount: 5,
-          status: 'APPROVED',
-        },
-        {
-          category: 'PAYMENT_CORRECTION',
-          triggerKeywords: ['correct', 'wrong', 'mistake', 'payment', 'pledge'],
-          userPromptPattern: 'Correct payment amount for contributor',
-          learnedGuidance:
-            'When a user asks to correct a payment or pledge, use `correct_payment` or `correct_pledge` and stage for explicit confirmation.',
-          confidenceScore: 1.0,
-          occurrenceCount: 5,
-          status: 'APPROVED',
-        },
-        {
-          category: 'ROLE_EXPLANATION',
-          triggerKeywords: ['invite', 'role', 'permission', 'coordinator', 'finance'],
-          userPromptPattern: 'Attempting restricted role action',
-          learnedGuidance:
-            'Always explain what the user CAN do based on their assigned role before stating restricted capabilities.',
-          confidenceScore: 1.0,
-          occurrenceCount: 5,
-          status: 'APPROVED',
-        },
-      ],
-    });
+      await this.prisma.aiLearnedExemplar.createMany({
+        data: [
+          {
+            category: 'KWANJULA_CULTURAL_GIFTS',
+            triggerKeywords: ['kwanjula', 'amakanzu', 'omutwalo', 'ebibo', 'amajani', 'mutwalo'],
+            userPromptPattern: 'Extract budget items for Kwanjula',
+            learnedGuidance:
+              'When users upload or mention Kwanjula items (Amakanzu, Omutwalo, Ebibo, Amajani), group them under Cultural Introduction Budget items.',
+            confidenceScore: 1.0,
+            occurrenceCount: 5,
+            status: 'APPROVED',
+          },
+          {
+            category: 'FUNERAL_MABEGO_RAISING',
+            triggerKeywords: ['funeral', 'burial', 'mabego', 'condolence', 'vigil'],
+            userPromptPattern: 'Funeral / Mabego contribution tracking',
+            learnedGuidance:
+              'For funeral (Mabego) events, prioritize rapid contribution recording and generate public transparency dashboard links.',
+            confidenceScore: 1.0,
+            occurrenceCount: 5,
+            status: 'APPROVED',
+          },
+          {
+            category: 'MOMO_SCREENSHOT_RECEIPT',
+            triggerKeywords: ['momo', 'screenshot', 'mobile money', 'mtn', 'airtel', 'receipt'],
+            userPromptPattern: 'Extract Mobile Money contribution screenshot',
+            learnedGuidance:
+              'When a Mobile Money receipt/screenshot is uploaded, extract the sender name, transaction ID, and amount, then stage for confirmation.',
+            confidenceScore: 1.0,
+            occurrenceCount: 5,
+            status: 'APPROVED',
+          },
+          {
+            category: 'PAYMENT_CORRECTION',
+            triggerKeywords: ['correct', 'wrong', 'mistake', 'payment', 'pledge'],
+            userPromptPattern: 'Correct payment amount for contributor',
+            learnedGuidance:
+              'When a user asks to correct a payment or pledge, use `correct_payment` or `correct_pledge` and stage for explicit confirmation.',
+            confidenceScore: 1.0,
+            occurrenceCount: 5,
+            status: 'APPROVED',
+          },
+          {
+            category: 'ROLE_EXPLANATION',
+            triggerKeywords: ['invite', 'role', 'permission', 'coordinator', 'finance'],
+            userPromptPattern: 'Attempting restricted role action',
+            learnedGuidance:
+              'Always explain what the user CAN do based on their assigned role before stating restricted capabilities.',
+            confidenceScore: 1.0,
+            occurrenceCount: 5,
+            status: 'APPROVED',
+          },
+        ],
+      });
+    } catch (err) {
+      this.logger.warn(`Skipping seedInitialExemplars during container startup: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 }

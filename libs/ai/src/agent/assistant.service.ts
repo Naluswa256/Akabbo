@@ -68,7 +68,11 @@ export class AssistantService {
   ) {}
 
   async onModuleInit(): Promise<void> {
-    await this.dynamicContext.seedInitialExemplars();
+    try {
+      await this.dynamicContext.seedInitialExemplars();
+    } catch (err) {
+      this.logger.warn(`AssistantService onModuleInit seed skipped: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   /** Map a resolve-and-stage outcome to a tool result the model narrates. */

@@ -4,6 +4,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { Logger as PinoLogger } from 'nestjs-pino';
 import { validateEnv } from '@akabbo/config';
 import { flushSentry, initSentry } from '@akabbo/observability';
+import { json, urlencoded } from 'express';
 import { AppModule } from './app.module';
 
 // Money is BigInt in the domain; make it JSON-serialisable at the HTTP edge so
@@ -31,6 +32,10 @@ async function bootstrap(): Promise<void> {
 
   // rawBody: the payment webhook verifies an HMAC over the exact bytes received.
   const app = await NestFactory.create(AppModule, { bufferLogs: true, rawBody: true });
+
+  // Increase HTTP body limit (up to 15MB) for base64 document/image uploads
+  app.use(json({ limit: '15mb' }));
+  app.use(urlencoded({ limit: '15mb', extended: true }));
 
   // Enable CORS so cross-origin frontend requests (e.g. localhost:3000) pass OPTIONS preflight.
   app.enableCors({

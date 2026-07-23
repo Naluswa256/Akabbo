@@ -100,6 +100,42 @@ export class MembershipService {
     });
   }
 
+  /** Update an existing member's role or status. Requires `member:manage`. */
+  async updateRole(
+    ctx: OperationContext,
+    targetUserId: string,
+    role: EventRole,
+  ): Promise<{ userId: string; role: EventRole }> {
+    return this.addMember(ctx, targetUserId, role);
+  }
+
+  /** List all active members of an event with their roles and user information. */
+  async listMembers(
+    ctx: OperationContext,
+  ): Promise<Array<{ id: string; userId: string; role: EventRole; invitedAt: string; user: { phone: string } }>> {
+    this.permissions.assert(ctx.event.role, 'event:read');
+    return this.tenant.runInEvent(ctx.event.eventId, async (tx) => {
+      const members = await tx.eventMember.findMany({
+        where: { eventId: ctx.event.eventId, status: 'ACTIVE' },
+        select: {
+          id: true,
+          userId: true,
+          role: true,
+          createdAt: true,
+          user: { select: { phone: true } },
+        },
+        orderBy: { createdAt: 'asc' },
+      });
+      return members.map((m) => ({
+        id: m.id,
+        userId: m.userId,
+        role: m.role,
+        invitedAt: m.createdAt.toISOString(),
+        user: { phone: m.user.phone },
+      }));
+    });
+  }
+
   /**
    * Assert an actor is a member and return their context, or 403. Convenience
    * for handlers: resolve-or-forbid in one call.

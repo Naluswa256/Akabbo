@@ -1,7 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { EventRole, GroupKind } from '@prisma/client';
-import { EntitlementService, OperationContext, PermissionService } from '@akabbo/access';
-import { GroupService, TenantContext } from '@akabbo/ledger';
+import {
+  EntitlementService,
+  OperationContext,
+  PermissionService,
+  assertEventWritable,
+} from '@akabbo/access';
+import { GroupService, MembershipService, TenantContext } from '@akabbo/ledger';
 import { AnnouncementService } from '@akabbo/transparency';
 import { SmsService } from '@akabbo/comms';
 import { EntityResolver } from '../entity-resolver.service';
@@ -41,6 +46,7 @@ export class AiMutationService {
     private readonly announcements: AnnouncementService,
     private readonly sms: SmsService,
     private readonly entitlements: EntitlementService,
+    private readonly membership: MembershipService,
   ) {}
 
   // ── Side effects (next-increment §5/§6): announcements + reminders ───────────
@@ -56,6 +62,45 @@ export class AiMutationService {
       status: 'done',
       message: `Drafted the announcement — review it, then say "publish" to make it public.`,
       data: { announcementId: a.id, body: a.body },
+    };
+  }
+
+  /** Update an existing committee member's role. Requires `member:manage`. */
+  async updateMemberRole(
+    ctx: OperationContext,
+    targetUserIdOrPhone: string,
+    roleInput: string,
+  ): Promise<StageResult> {
+    this.permissions.assert(ctx.event.role, 'member:manage');
+    assertEventWritable(ctx.event.status);
+    if (!targetUserIdOrPhone.trim()) return clarify('Whose role should I update?');
+
+    const role = mapRole(roleInput);
+    if (!role) {
+      return clarify(
+        'Which role should I assign? Choose one of: OWNER, CO_OWNER, COORDINATOR, FINANCE, or VIEWER.',
+      );
+    }
+
+    const members = await this.membership.listMembers(ctx);
+    const normalizedInput = targetUserIdOrPhone.replace(/\D/g, '');
+    const target = members.find(
+      (m) =>
+        m.userId === targetUserIdOrPhone.trim() ||
+        (normalizedInput && m.user.phone.replace(/\D/g, '').includes(normalizedInput)),
+    );
+
+    if (!target) {
+      return clarify(
+        `Could not find an active committee member matching "${targetUserIdOrPhone}".`,
+      );
+    }
+
+    const updated = await this.membership.updateRole(ctx, target.userId, role);
+    return {
+      status: 'done',
+      message: `Updated committee member's role to ${role}.`,
+      data: updated,
     };
   }
 

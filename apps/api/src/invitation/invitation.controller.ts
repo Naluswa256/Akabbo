@@ -69,4 +69,22 @@ export class InvitationController {
     await this.invitations.revokeInvitation(await this.ctx(actor, eventId), id);
     return { ok: true };
   }
+
+  // --- Member management (list members & update role) ------------------------
+  @Get('events/:eventId/members')
+  @UseGuards(AuthGuard)
+  async listMembers(@CurrentActor() actor: Actor, @Param('eventId') eventId: string) {
+    return this.membership.listMembers(await this.ctx(actor, eventId));
+  }
+
+  @Post('events/:eventId/members/:targetUserId/role')
+  @UseGuards(AuthGuard)
+  async updateMemberRole(
+    @CurrentActor() actor: Actor,
+    @Param('eventId') eventId: string,
+    @Param('targetUserId') targetUserId: string,
+    @Body() dto: { role: import('@prisma/client').EventRole },
+  ) {
+    return this.membership.updateRole(await this.ctx(actor, eventId), targetUserId, dto.role);
+  }
 }

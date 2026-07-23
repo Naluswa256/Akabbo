@@ -341,6 +341,14 @@ export class AssistantService {
               args.phone === undefined ? undefined : String(args.phone),
             ),
           );
+        case 'update_member_role':
+          return this.staged(
+            await this.mutations.updateMemberRole(
+              ctx,
+              String(args.nameOrPhone ?? ''),
+              String(args.role ?? ''),
+            ),
+          );
 
         // ── Groups (low-risk writes; executed immediately) ────────────────────
         case 'create_group':
@@ -526,6 +534,33 @@ const SYSTEM_PROMPT = [
   '',
   'However, use visual UI or public event pages where visual interaction is objectively better,',
   'such as viewing budgets, contribution tables, public progress, documents, or event summaries.',
+  '',
+  '============================================================',
+  'ROLE PERMISSION ENFORCEMENT & EXPLANATIONS',
+  '============================================================',
+  '',
+  'You MUST strictly enforce and explain the active user\'s Event Role (`User Event Role: OWNER | CO_OWNER | COORDINATOR | FINANCE | VIEWER`):',
+  '',
+  '1. OWNER / CO_OWNER:',
+  '   • Allowed: Everything (Add/edit pledges, payments, budget items, documents, SMS reminders, announcements, invite committee members, configure public settings).',
+  '',
+  '2. COORDINATOR:',
+  '   • Allowed: Managing day-to-day event operations (Add/edit pledges, record payments, upload documents, manage budget items, send SMS reminders, publish announcements).',
+  '   • NOT Allowed: Inviting new committee members or changing public event privacy settings.',
+  '   • If they attempt to invite members or change privacy settings, explain:',
+  '     "As a Coordinator, you can manage pledges, record contributions, upload budgets, send SMS reminders, and publish announcements. However, inviting new committee members or changing event privacy requires an Owner or Co-Owner."',
+  '',
+  '3. FINANCE:',
+  '   • Allowed: Financial transactions & accuracy (Record/correct contributions, add pledges, manage budget items, upload receipts/documents, view funding reports).',
+  '   • NOT Allowed: Sending SMS reminders, publishing announcements, updating event title/dates, or inviting committee members.',
+  '   • If they attempt unauthorized actions, explain:',
+  '     "As a Finance member, you are assigned to handle financial transactions, record/correct contributions, and manage the event budget. Actions like sending SMS reminders, publishing public announcements, or inviting members are reserved for Coordinators and Owners."',
+  '',
+  '4. VIEWER:',
+  '   • Allowed: Viewing event progress, funding summary, and budget plans.',
+  '   • NOT Allowed: Any write actions (No adding pledges, recording payments, editing budgets, sending SMS, publishing announcements, or inviting members).',
+  '   • If they attempt to write or modify data, explain:',
+  '     "You have Viewer access to this event, which lets you track funding progress and view budget plans. To add contributions, edit budgets, or send reminders, please ask an event Coordinator or Owner to update your role."',
   '',
   '============================================================',
   '3. EVENT CONTEXT',

@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { BadRequestException, BadGatewayException, Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { GrantStatus, InvoiceStatus, SmsLedgerKind, AiLedgerKind } from '@prisma/client';
 import { EntitlementScope, EntitlementService, ResolvedEntitlement } from '@akabbo/access';
 import { PrismaService } from '@akabbo/prisma';

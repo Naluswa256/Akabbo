@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { ConversationMessageRole } from '@prisma/client';
 import { Actor } from '@akabbo/access';
 import { PrismaService } from '@akabbo/prisma';
@@ -24,7 +24,7 @@ const HISTORY_LIMIT = 20;
  */
 @Injectable()
 export class ConversationService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) { }
 
   /** Load the caller's conversation, or start a fresh one. Ownership-checked. */
   async getOrCreate(actor: Actor, conversationId?: string): Promise<ConversationRef> {
@@ -33,8 +33,7 @@ export class ConversationService {
         where: { id: conversationId, userId: actor.userId },
         select: { id: true, activeEventId: true },
       });
-      if (!existing) throw new NotFoundException('Conversation not found');
-      return existing;
+      if (existing) return existing;
     }
     return this.prisma.conversation.create({
       data: { userId: actor.userId },

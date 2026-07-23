@@ -79,9 +79,10 @@ export class PublicViewService {
    * a matching token. The `event` table is not RLS-scoped, so this lookup needs
    * no tenant context — it is the entry gate that establishes one.
    */
-  private async resolve(slug: string, token?: string): Promise<ResolvedEvent> {
-    const event = await this.prisma.event.findUnique({
-      where: { slug },
+  private async resolve(slugOrId: string, token?: string): Promise<ResolvedEvent> {
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(slugOrId);
+    let event = await this.prisma.event.findFirst({
+      where: isUuid ? { id: slugOrId } : { slug: slugOrId },
       select: {
         id: true,
         slug: true,
@@ -98,6 +99,29 @@ export class PublicViewService {
         publicRevision: true,
       },
     });
+
+    if (!event && !isUuid) {
+      // Fallback: match by slug prefix if base slug was passed without suffix
+      event = await this.prisma.event.findFirst({
+        where: { slug: { startsWith: slugOrId }, isPublic: true },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          slug: true,
+          name: true,
+          description: true,
+          eventDate: true,
+          status: true,
+          currency: true,
+          targetAmount: true,
+          isPublic: true,
+          publicAccessToken: true,
+          contributorVisibility: true,
+          budgetVisibility: true,
+          publicRevision: true,
+        },
+      });
+    }
 
     // Missing OR revoked → one indistinguishable 404 (no existence oracle).
     if (!event || !event.isPublic) throw new PublicEventNotFoundException();

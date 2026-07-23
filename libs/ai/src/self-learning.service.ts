@@ -167,6 +167,13 @@ export class SelfLearningService {
     });
   }
 
+  async listExemplars(status?: string) {
+    return this.prisma.aiLearnedExemplar.findMany({
+      where: status ? { status } : {},
+      orderBy: [{ occurrenceCount: 'desc' }, { createdAt: 'desc' }],
+    });
+  }
+
   async approveExemplar(exemplarId: string) {
     return this.prisma.aiLearnedExemplar.update({
       where: { id: exemplarId },

@@ -5,6 +5,7 @@ import {
   Headers,
   Param,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { SelfLearningService, TelemetryService } from '@akabbo/ai';
@@ -34,6 +35,15 @@ export class LearningController {
       recentTracesCount: traces.length,
       latestReflectionLog: latestLog,
     };
+  }
+
+  @Get('exemplars')
+  async listExemplars(
+    @Headers('x-akabbo-admin-secret') secret?: string,
+    @Query('status') status?: string,
+  ) {
+    this.assertAdminSecret(secret);
+    return this.selfLearning.listExemplars(status);
   }
 
   @Post('evaluate')

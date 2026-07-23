@@ -1,5 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { OperationContext, PermissionService } from '@akabbo/access';
+import { AppConfigService } from '@akabbo/config';
+import { PrismaService } from '@akabbo/prisma';
 import {
   EventReport,
   GroupContribution,
@@ -29,11 +31,47 @@ export class AiQueryService {
     private readonly permissions: PermissionService,
     private readonly resolver: EntityResolver,
     private readonly groups: GroupService,
+    private readonly prisma: PrismaService,
+    private readonly config: AppConfigService,
   ) {}
 
   /** The whole "how are we doing?" picture (Part 1/2/9/15/17). */
   overview(ctx: OperationContext): Promise<EventReport> {
     return this.queries.getEventReport(ctx);
+  }
+
+  /**
+   * The event's PUBLIC/shareable link (transparency spec). Returns the slug +
+   * ready-to-share URL (invite-only events include their access token). If the
+   * public page is turned off, says so instead of handing out a dead link.
+   */
+  async getPublicLink(ctx: OperationContext): Promise<{
+    isPublic: boolean;
+    slug: string;
+    publicPath: string;
+    publicUrl: string | null;
+    tokenRequired: boolean;
+    note?: string;
+  }> {
+    this.permissions.assert(ctx.event.role, 'event:read');
+    // `event` is not RLS-scoped — read it directly.
+    const event = await this.prisma.event.findUniqueOrThrow({
+      where: { id: ctx.event.eventId },
+      select: { slug: true, isPublic: true, publicAccessToken: true },
+    });
+    const query = event.publicAccessToken ? `?t=${event.publicAccessToken}` : '';
+    const publicPath = `/e/${event.slug}${query}`;
+    const base = this.config.get('PUBLIC_APP_URL');
+    return {
+      isPublic: event.isPublic,
+      slug: event.slug,
+      publicPath,
+      publicUrl: base ? `${base.replace(/\/$/, '')}${publicPath}` : null,
+      tokenRequired: event.publicAccessToken !== null,
+      note: event.isPublic
+        ? undefined
+        : 'The public page is currently turned OFF — turn it on to share this link.',
+    };
   }
 
   /** Per-group contribution rollup ("how much has the bride's side given?", §9). */

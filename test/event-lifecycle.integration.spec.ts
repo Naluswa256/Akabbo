@@ -66,6 +66,21 @@ describe('Slice A — event lifecycle & identity (integration)', () => {
     );
   });
 
+  /** Raise the active-event ceiling (metering §10): a multi-event user subscribes. */
+  const grantUnlimitedEvents = async (userId: string): Promise<void> => {
+    const account = await prisma.billingAccount.create({
+      data: { ownerUserId: userId },
+      select: { id: true },
+    });
+    const plan = await prisma.plan.findUniqueOrThrow({
+      where: { code: 'BUSINESS' },
+      select: { id: true },
+    });
+    await prisma.entitlementGrant.create({
+      data: { accountId: account.id, planId: plan.id, status: 'ACTIVE' },
+    });
+  };
+
   it('creates an event with slug, target, date and regional context', async () => {
     const owner = await makeUser();
     const event = await events.createEvent(owner, {
@@ -85,6 +100,7 @@ describe('Slice A — event lifecycle & identity (integration)', () => {
 
   it('slugs are unique even for identically-named events', async () => {
     const owner = await makeUser();
+    await grantUnlimitedEvents(owner.userId);
     const a = await events.createEvent(owner, { name: 'Family Funeral' });
     const b = await events.createEvent(owner, { name: 'Family Funeral' });
     expect(a.slug).not.toBe(b.slug);
@@ -161,6 +177,7 @@ describe('Slice A — event lifecycle & identity (integration)', () => {
   it('"My Events" lists only events the user is an ACTIVE member of (§26)', async () => {
     const william = await makeUser();
     const brian = await makeUser();
+    await grantUnlimitedEvents(william.userId); // William runs two events (subscriber)
     await events.createEvent(william, { name: 'Wedding' });
     await events.createEvent(william, { name: 'Funeral' });
     await events.createEvent(brian, { name: "Brian's own" });

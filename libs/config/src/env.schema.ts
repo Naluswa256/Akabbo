@@ -36,6 +36,11 @@ export const envSchema = z
     // --- Worker ----------------------------------------------------------------
     WORKER_HEARTBEAT_MS: z.coerce.number().int().positive().default(15000),
 
+    // Public web app origin (e.g. https://app.akabbo.com). Used to build
+    // shareable invite/join links. Empty → the API returns the token + path and
+    // the frontend prepends its own origin.
+    PUBLIC_APP_URL: z.string().default(''),
+
     // --- Auth (Phase 1) --------------------------------------------------------
     // Signs session JWTs. MUST be overridden in production (guarded below).
     JWT_SECRET: z.string().min(16).default(DEV_JWT_SECRET),

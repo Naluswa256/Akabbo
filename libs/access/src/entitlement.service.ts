@@ -1,6 +1,17 @@
 import { Injectable } from '@nestjs/common';
-import { GrantStatus } from '@prisma/client';
+import { GrantStatus, InvitationStatus, MembershipStatus } from '@prisma/client';
 import { PrismaService } from '@akabbo/prisma';
+
+/**
+ * Derive the team-seat allowance from a plan's feature flags (metering §4/§7:
+ * "seats = active event_member count"). `unlimited_seats` → no cap; `seats_N` →
+ * N; no seat feature (Free) → 1 (the solo organizer only).
+ */
+function seatsFromFeatures(features: string[]): number | null {
+  if (features.includes('unlimited_seats')) return null;
+  const seatFeat = features.find((f) => /^seats_\d+$/.test(f));
+  return seatFeat ? Number.parseInt(seatFeat.split('_')[1], 10) : 1;
+}
 
 /**
  * Entitlement scope — a plan attaches to EITHER an event or an account
@@ -16,7 +27,7 @@ export interface EntitlementScope {
  * plan permit / can you afford it?" rather than "are you allowed?".
  */
 export type EntitlementAction =
-  'add_contributor' | 'create_pledge' | 'record_fulfillment' | 'send_sms';
+  'add_contributor' | 'add_member' | 'create_pledge' | 'record_fulfillment' | 'send_sms';
 
 export interface EntitlementDecision {
   allowed: boolean;
@@ -32,6 +43,8 @@ export interface ResolvedEntitlement {
   status: GrantStatus;
   /** null = unlimited/soft cap (Premium/Business). */
   maxContributors: number | null;
+  /** Team seats (active members + pending invites). null = unlimited. */
+  maxSeats: number | null;
   features: string[];
   /** Current SMS-credit balance for the scope (SUM of the append-only ledger). */
   smsBalance: number;
@@ -81,6 +94,21 @@ export class EntitlementService {
       return { allowed: true };
     }
 
+    if (action === 'add_member') {
+      if (ent.maxSeats === null) return { allowed: true };
+      const used = scope.eventId ? await this.countSeats(scope.eventId) : 0;
+      if (used + quantity > ent.maxSeats) {
+        return {
+          allowed: false,
+          reason: 'seat_limit',
+          message: `Your ${ent.planCode} plan includes ${ent.maxSeats} team seat${
+            ent.maxSeats === 1 ? '' : 's'
+          }. Upgrade to add more people to the team.`,
+        };
+      }
+      return { allowed: true };
+    }
+
     if (action === 'send_sms') {
       if (ent.smsBalance < quantity) {
         return {
@@ -104,9 +132,23 @@ export class EntitlementService {
       planCode: plan.code,
       status: grant?.status ?? GrantStatus.TRIALING,
       maxContributors: plan.maxContributors,
+      maxSeats: seatsFromFeatures(plan.features),
       features: plan.features,
       smsBalance,
     };
+  }
+
+  /** Seats in use for an event = ACTIVE members + still-valid PENDING invites. */
+  private async countSeats(eventId: string): Promise<number> {
+    const members = await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_event_id', ${eventId}, true)`;
+      return tx.eventMember.count({ where: { status: MembershipStatus.ACTIVE } });
+    });
+    // Invitations are NOT event-RLS-scoped (invitee isn't a member yet) — read direct.
+    const pending = await this.prisma.invitation.count({
+      where: { eventId, status: InvitationStatus.PENDING, expiresAt: { gt: new Date() } },
+    });
+    return members + pending;
   }
 
   private async activeGrant(

@@ -15,6 +15,7 @@ import { toolCallSchema } from '../tools/tool-call';
 import { AiQueryService } from './ai-query.service';
 import { AiMutationService, StageResult } from './ai-mutation.service';
 import { AgentSession } from './agent-session';
+import { currentDateNote } from '../date-context';
 
 type Dispatch = (name: string, args: Record<string, unknown>) => Promise<ToolOutcome>;
 interface ToolOutcome {
@@ -111,7 +112,7 @@ export class AssistantService {
     history: LlmMessage[],
   ): Promise<ChatResult> {
     const messages: LlmMessage[] = [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: `${SYSTEM_PROMPT}\n\n${currentDateNote()}` },
       ...history,
       { role: 'user', content: message },
     ];
@@ -248,6 +249,8 @@ export class AssistantService {
           return json(await this.query.budgetBreakdown(ctx));
         case 'get_group_contributions':
           return json({ groups: await this.query.groupContributions(ctx) });
+        case 'get_public_link':
+          return json(await this.query.getPublicLink(ctx));
 
         // ── WRITE tools (resolve → gate → STAGE for confirmation) ──────────────
         case 'add_person':
@@ -308,6 +311,15 @@ export class AssistantService {
           );
         case 'send_reminders':
           return this.staged(await this.mutations.prepareReminders(ctx, String(args.body ?? '')));
+        case 'invite_member':
+          return this.staged(
+            await this.mutations.inviteMember(
+              ctx,
+              args.name === undefined ? undefined : String(args.name),
+              args.role === undefined ? undefined : String(args.role),
+              args.phone === undefined ? undefined : String(args.phone),
+            ),
+          );
 
         // ── Groups (low-risk writes; executed immediately) ────────────────────
         case 'create_group':
@@ -1388,12 +1400,37 @@ export const AGENT_TOOL_SPECS: LlmToolSpec[] = [
   },
   {
     name: 'add_person',
-    description: 'Add a new contributor (person) to the event. Staged for confirmation.',
+    description:
+      'Add a CONTRIBUTOR — someone who pledges or gives money to the event. NOT for committee members or people who need to log in / manage the event (use invite_member for those). Staged for confirmation.',
     parameters: {
       type: 'object',
       properties: { displayName: { type: 'string' } },
       required: ['displayName'],
     },
+  },
+  {
+    name: 'invite_member',
+    description:
+      'Invite a COMMITTEE MEMBER / co-organizer who needs management access — use whenever the user says "invite", "add to the committee/team", or "give someone access". Creates a share/join LINK; the invitee opens it, enters their phone, and verifies a code to join. ' +
+      'DO NOT GUESS what access they should have: only pass `role` when the user CLEARLY said what the person can do; otherwise leave it empty and the tool will ask, in plain language. When the user answers, pass their words as `role` (e.g. "help run the event", "handle the money", "co-organize", "just view"). Staged for confirmation; the link comes back after confirming.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'The person being invited (for display).' },
+        role: {
+          type: 'string',
+          description:
+            'ONLY if the user clearly stated the access, in their own words. Leave empty to have the tool ask.',
+        },
+        phone: { type: 'string', description: 'Optional MoMo/phone for display.' },
+      },
+    },
+  },
+  {
+    name: 'get_public_link',
+    description:
+      'The event\'s public/shareable link — use for "give me the public link", "share the event". Returns the ready-to-share URL (or the path for the app to complete). Tells you if the public page is turned off.',
+    parameters: { type: 'object', properties: {} },
   },
   {
     name: 'record_pledge',

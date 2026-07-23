@@ -41,7 +41,9 @@ export interface RecordFulfillmentInput {
 }
 
 export interface RecordDirectContributionInput {
-  personId: string;
+  personId?: string;
+  displayName?: string;
+  phone?: string;
   value: bigint;
   kind?: FulfillmentKind;
   method?: PaymentMethod;
@@ -149,17 +151,42 @@ export class FulfillmentService {
       const replay = await this.findByIdempotencyKey(tx, input.idempotencyKey);
       if (replay) return replay;
 
-      const person = await tx.person.findFirst({
-        where: { id: input.personId },
-        select: { id: true },
-      });
-      if (!person) throw new NotFoundException('Person not found in this event');
-
+      let personId = input.personId;
       const source = input.source ?? ProvenanceSource.human_typed;
+      if (!personId) {
+        if (!input.displayName) throw new NotFoundException('Person or displayName required');
+        const p = await tx.person.create({
+          data: {
+            eventId: ctx.event.eventId,
+            displayName: input.displayName,
+            phone: input.phone ?? null,
+            source,
+            createdById: ctx.actor.userId,
+          },
+          select: { id: true },
+        });
+        await this.audit.write(tx, {
+          eventId: ctx.event.eventId,
+          actorUserId: ctx.actor.userId,
+          action: 'person:create',
+          resourceType: 'person',
+          resourceId: p.id,
+          source,
+          newValue: { displayName: input.displayName },
+        });
+        personId = p.id;
+      } else {
+        const person = await tx.person.findFirst({
+          where: { id: personId },
+          select: { id: true },
+        });
+        if (!person) throw new NotFoundException('Person not found in this event');
+      }
+
       const pledge = await tx.pledge.create({
         data: {
           eventId: ctx.event.eventId,
-          personId: input.personId,
+          personId,
           type: input.type ?? PledgeType.CASH,
           committedValue: input.value,
           status: PledgeStatus.PLEDGED, // recomputed to FULFILLED below

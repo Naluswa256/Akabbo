@@ -1,7 +1,13 @@
 import { randomBytes } from 'node:crypto';
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { EventRole, InvitationStatus, MembershipStatus } from '@prisma/client';
-import { Actor, OperationContext, PermissionService, assertEventWritable } from '@akabbo/access';
+import {
+  Actor,
+  EntitlementService,
+  OperationContext,
+  PermissionService,
+  assertEventWritable,
+} from '@akabbo/access';
 import { PrismaService } from '@akabbo/prisma';
 import { TenantContext } from './tenant-context.service';
 import { AuditWriter } from './audit.writer';
@@ -47,6 +53,7 @@ export class InvitationService {
     private readonly prisma: PrismaService,
     private readonly tenant: TenantContext,
     private readonly permissions: PermissionService,
+    private readonly entitlements: EntitlementService,
     private readonly audit: AuditWriter,
   ) {}
 
@@ -57,6 +64,11 @@ export class InvitationService {
   ): Promise<InvitationView> {
     this.permissions.assert(ctx.event.role, 'member:manage');
     assertEventWritable(ctx.event.status);
+    // Seat gate (metering §7): don't invite past the plan's team-seat allowance.
+    const seat = await this.entitlements.check({ eventId: ctx.event.eventId }, 'add_member');
+    if (!seat.allowed) {
+      throw new ForbiddenException(seat.message ?? 'Team seat limit reached');
+    }
     const token = randomBytes(24).toString('base64url');
     const ttl = input.ttlSeconds ?? DEFAULT_TTL_SECONDS;
     const invitation = await this.prisma.invitation.create({

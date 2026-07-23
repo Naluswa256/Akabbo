@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import { GroupKind } from '@prisma/client';
-import { OperationContext, PermissionService } from '@akabbo/access';
+import { EventRole, GroupKind } from '@prisma/client';
+import { EntitlementService, OperationContext, PermissionService } from '@akabbo/access';
 import { GroupService, TenantContext } from '@akabbo/ledger';
 import { AnnouncementService } from '@akabbo/transparency';
 import { SmsService } from '@akabbo/comms';
@@ -40,6 +40,7 @@ export class AiMutationService {
     private readonly groups: GroupService,
     private readonly announcements: AnnouncementService,
     private readonly sms: SmsService,
+    private readonly entitlements: EntitlementService,
   ) {}
 
   // ── Side effects (next-increment §5/§6): announcements + reminders ───────────
@@ -94,6 +95,58 @@ export class AiMutationService {
       ctx,
       { tool: 'send_sms_reminders', body: body.trim() },
       `Send a reminder to ${preview.recipientCount} outstanding contributor(s)${note}? This uses SMS credits.`,
+    );
+  }
+
+  /**
+   * Invite a COMMITTEE MEMBER (management access) — NOT a contributor. Resolves
+   * the role from natural language (default COORDINATOR for "committee member"),
+   * gates on `member:manage` (owner-tier), and STAGES the invitation. On confirm
+   * it creates a share/join link the invitee uses with phone + OTP (§4/§36).
+   */
+  async inviteMember(
+    ctx: OperationContext,
+    name: string | undefined,
+    role: string | undefined,
+    phone: string | undefined,
+  ): Promise<StageResult> {
+    this.permissions.assert(ctx.event.role, 'member:manage');
+    const who = name?.trim() || 'this person';
+
+    // NEVER assume the role. If it isn't clearly stated, ask what the person
+    // should be able to DO — in plain language, no technical terms.
+    const resolvedRole = mapRole(role);
+    if (resolvedRole === null) {
+      return {
+        status: 'clarification',
+        message:
+          `What should ${who} be able to do? Reply with one:\n` +
+          `• Help run the event — add people, record payments, and send reminders\n` +
+          `• Handle the money — record and correct payments only\n` +
+          `• Co-organize — full control, including inviting others\n` +
+          `• Just view progress — see the event but not change anything`,
+      };
+    }
+
+    // Seat gate (metering §7): tell them up front if the plan is full.
+    const seat = await this.entitlements.check({ eventId: ctx.event.eventId }, 'add_member');
+    if (!seat.allowed) {
+      return {
+        status: 'clarification',
+        message: seat.message ?? 'Your plan has no free team seats.',
+      };
+    }
+
+    return this.stage(
+      ctx,
+      {
+        tool: 'invite_member',
+        role: resolvedRole,
+        displayName: name?.trim() || undefined,
+        phone: phone?.trim() || undefined,
+      },
+      `Invite ${who} so they can ${roleSummary(resolvedRole)}? ` +
+        `I'll create a join link they open to enter their phone and verify a code.`,
     );
   }
 
@@ -344,4 +397,47 @@ function ambiguous(candidates: { displayName: string }[]): StageResult {
     message: 'Which person do you mean?',
     candidates: candidates.map((c) => c.displayName),
   };
+}
+
+/**
+ * Map an EXPLICIT capability phrase to a role — or `null` when it isn't clear,
+ * so the agent ASKS rather than assumes (the organizer's explicit requirement).
+ * Vague inputs ("committee", "a member", "") deliberately return null. We never
+ * grant true OWNER via an invite; the strongest invitable role is CO_OWNER.
+ */
+function mapRole(role: string | undefined): EventRole | null {
+  const r = (role ?? '').toLowerCase().trim();
+  if (!r) return null;
+  if (/(co-?owner|co-?organi|full (control|access)|everything|all access)/.test(r)) {
+    return EventRole.CO_OWNER;
+  }
+  if (
+    /(finance|treasurer|cashier|handle (the )?money|record (and )?correct|payments? only)/.test(r)
+  ) {
+    return EventRole.FINANCE;
+  }
+  if (/(view|read[- ]?only|observ|see (the )?progress|guest|just look|watch)/.test(r)) {
+    return EventRole.VIEWER;
+  }
+  if (
+    /(run|coordinat|organi[sz]e|manage the event|help run|day[- ]?to[- ]?day|add people)/.test(r)
+  ) {
+    return EventRole.COORDINATOR;
+  }
+  return null; // "committee", "member", unclear → ask, don't assume
+}
+
+/** Plain-language description of what a role can do (no technical terms). */
+function roleSummary(role: EventRole): string {
+  switch (role) {
+    case EventRole.CO_OWNER:
+      return 'co-organize the event with full control, including inviting others';
+    case EventRole.FINANCE:
+      return 'record and correct payments';
+    case EventRole.VIEWER:
+      return 'view the event progress but not make changes';
+    case EventRole.COORDINATOR:
+    default:
+      return 'help run the event — add people, record payments, and send reminders';
+  }
 }

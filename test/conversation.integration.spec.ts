@@ -94,6 +94,21 @@ describe('AI operating layer — conversation + active event (integration)', () 
     );
   });
 
+  /** Raise the active-event ceiling: running several events is a subscriber. */
+  const grantUnlimitedEvents = async (userId: string): Promise<void> => {
+    const account = await prisma.billingAccount.create({
+      data: { ownerUserId: userId },
+      select: { id: true },
+    });
+    const plan = await prisma.plan.findUniqueOrThrow({
+      where: { code: 'BUSINESS' },
+      select: { id: true },
+    });
+    await prisma.entitlementGrant.create({
+      data: { accountId: account.id, planId: plan.id, status: 'ACTIVE' },
+    });
+  };
+
   it('creates an event from natural language and makes it active (§3 create_event)', async () => {
     const owner = await makeUser();
     llm.toolCall('create_event', { name: 'William & Sarah Wedding', target: '25m' });
@@ -132,6 +147,7 @@ describe('AI operating layer — conversation + active event (integration)', () 
 
   it('asks WHICH event when a read is attempted with no active event and several exist', async () => {
     const owner = await makeUser();
+    await grantUnlimitedEvents(owner.userId); // a multi-event user is a subscriber
     await events.createEvent(owner, { name: 'Wedding' });
     await events.createEvent(owner, { name: 'Funeral' });
 
@@ -153,6 +169,7 @@ describe('AI operating layer — conversation + active event (integration)', () 
 
   it('persists the active event and replays history across turns (§7)', async () => {
     const owner = await makeUser();
+    await grantUnlimitedEvents(owner.userId); // a multi-event user is a subscriber
     const wedding = await events.createEvent(owner, { name: 'Wedding' });
     const funeral = await events.createEvent(owner, { name: 'Funeral' });
 

@@ -8,6 +8,7 @@ import { ConfirmationService } from './confirmation.service';
 import { UsageMeter } from './usage-meter.service';
 import { parseTier1 } from './tier1-parser';
 import { parseAmountToMinorUnits } from './amount';
+import { currentDateNote } from './date-context';
 import { costMicroUsd } from './pricing';
 import { LLM_TOOL_SPECS, ToolCall, toolCallSchema } from './tools/tool-call';
 
@@ -931,7 +932,7 @@ export class CaptureService {
   ): Promise<{ toolCall: ToolCall; confidence: number } | null> {
     const result = await this.llm.complete({
       messages: [
-        { role: 'system', content: CAPTURE_SYSTEM_PROMPT },
+        { role: 'system', content: `${CAPTURE_SYSTEM_PROMPT}\n\n${currentDateNote()}` },
         // Untrusted user content stays in the user channel (§3.9).
         { role: 'user', content: utterance },
       ],
@@ -1069,8 +1070,29 @@ export class CaptureService {
     // record_pledge / record_payment both start by resolving the person.
     const name = call.args.personName;
     const person = await this.resolver.resolvePerson(ctx.event.eventId, name);
-    if (person.status === 'none')
-      return { type: 'clarify', result: this.unknownPerson(name, tier) };
+    if (person.status === 'none') {
+      if (call.tool === 'record_pledge') {
+        return {
+          type: 'action',
+          action: {
+            tool: 'record_pledge',
+            displayName: name,
+            amount: call.args.amount,
+            type: call.args.type as PledgeType | undefined,
+          },
+          prompt: `Add ${name} as a contributor and record their pledge of ${call.args.amount}?`,
+        };
+      }
+      return {
+        type: 'action',
+        action: {
+          tool: 'record_direct_contribution',
+          displayName: name,
+          amount: call.args.amount,
+        },
+        prompt: `Add ${name} as a contributor and record their contribution of ${call.args.amount}?`,
+      };
+    }
     if (person.status === 'ambiguous') {
       return { type: 'clarify', result: this.ambiguousPerson(person.candidates, tier) };
     }

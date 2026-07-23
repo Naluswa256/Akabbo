@@ -1,9 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import { PledgeType, ProvenanceSource } from '@prisma/client';
+import { EventRole, PledgeType, ProvenanceSource } from '@prisma/client';
 import { OperationContext } from '@akabbo/access';
+import { AppConfigService } from '@akabbo/config';
 import {
   BudgetService,
   FulfillmentService,
+  InvitationService,
   LedgerQueryService,
   PersonService,
   PledgeService,
@@ -25,14 +27,21 @@ export type StoredAction =
   | { tool: 'add_person'; displayName: string }
   | {
       tool: 'record_pledge';
-      personId: string;
+      personId?: string;
       displayName: string;
       amount: string;
       type?: PledgeType;
+      phone?: string;
     }
   | { tool: 'record_payment'; pledgeId: string; displayName: string; amount: string }
   /** A gift with no prior pledge (§15) — creates the commitment and discharges it. */
-  | { tool: 'record_direct_contribution'; personId: string; displayName: string; amount: string }
+  | {
+      tool: 'record_direct_contribution';
+      personId?: string;
+      displayName: string;
+      amount: string;
+      phone?: string;
+    }
   /** A budget line proposed by document extraction, promoted on confirmation. */
   | { tool: 'create_budget_item'; name: string; targetValue: string; sourceDocumentId?: string }
   | { tool: 'update_budget_item'; itemId: string; name: string; targetValue: string }
@@ -48,6 +57,8 @@ export type StoredAction =
     }
   /** A reminder blast the organizer approved — sent (credit-metered) on confirm. */
   | { tool: 'send_sms_reminders'; body: string }
+  /** Invite a COMMITTEE MEMBER (management access) — creates a share/join link. */
+  | { tool: 'invite_member'; role: EventRole; displayName?: string; phone?: string }
   | { tool: 'get_outstanding_pledge'; pledgeId: string; displayName: string }
   | { tool: 'get_summary' };
 
@@ -69,6 +80,8 @@ export class ToolExecutor {
     private readonly budget: BudgetService,
     private readonly queries: LedgerQueryService,
     private readonly sms: SmsService,
+    private readonly invitations: InvitationService,
+    private readonly config: AppConfigService,
   ) {}
 
   /** Dispatch a resolved action to the right typed call. */
@@ -88,6 +101,7 @@ export class ToolExecutor {
           BigInt(action.amount),
           source,
           action.type,
+          action.phone,
         );
       case 'record_payment':
         return this.recordPayment(
@@ -104,6 +118,7 @@ export class ToolExecutor {
           action.displayName,
           BigInt(action.amount),
           source,
+          action.phone,
         );
       case 'create_budget_item':
         return this.createBudgetItem(
@@ -135,6 +150,8 @@ export class ToolExecutor {
         return this.mergePeople(ctx, action);
       case 'send_sms_reminders':
         return this.sendReminders(ctx, action.body);
+      case 'invite_member':
+        return this.inviteMember(ctx, action);
       case 'get_outstanding_pledge':
         return this.getOutstandingForPledge(ctx, action.pledgeId, action.displayName);
       case 'get_summary':
@@ -203,6 +220,40 @@ export class ToolExecutor {
     };
   }
 
+  /**
+   * Invite a COMMITTEE MEMBER (blueprint §4/§36): create a share-link invitation
+   * with a role. The token is the capability — the invitee opens the link,
+   * enters their phone, verifies OTP, and JOINS as an event member. Distinct
+   * from `add_person` (a contributor). Returns the join link for the organizer
+   * to share; the frontend builds the URL when no PUBLIC_APP_URL is configured.
+   */
+  async inviteMember(
+    ctx: OperationContext,
+    action: { role: EventRole; displayName?: string; phone?: string },
+  ): Promise<ExecutionResult> {
+    const invitation = await this.invitations.createInvitation(ctx, {
+      role: action.role,
+      invitedPhone: action.phone,
+    });
+    const invitePath = `/join/${invitation.token}`;
+    const base = this.config.get('PUBLIC_APP_URL');
+    const inviteUrl = base ? `${base.replace(/\/$/, '')}${invitePath}` : null;
+    const who = action.displayName ?? 'the member';
+    return {
+      message:
+        `Invitation created for ${who} as ${invitation.role}. Share this link — they join by ` +
+        `entering their phone and verifying an OTP:\n${inviteUrl ?? invitePath}`,
+      data: {
+        token: invitation.token,
+        role: invitation.role,
+        invitePath,
+        inviteUrl,
+        expiresAt: invitation.expiresAt,
+        displayName: action.displayName ?? null,
+      },
+    };
+  }
+
   async addPerson(
     ctx: OperationContext,
     displayName: string,
@@ -214,14 +265,20 @@ export class ToolExecutor {
 
   async recordPledge(
     ctx: OperationContext,
-    personId: string,
+    personId: string | undefined,
     displayName: string,
     amount: bigint,
     source: ProvenanceSource,
     type?: PledgeType,
+    phone?: string,
   ): Promise<ExecutionResult> {
+    let targetPersonId = personId;
+    if (!targetPersonId) {
+      const person = await this.people.createPerson(ctx, { displayName, phone, source });
+      targetPersonId = person.id;
+    }
     const pledge = await this.pledges.createPledge(ctx, {
-      personId,
+      personId: targetPersonId,
       committedValue: amount,
       type,
       source,
@@ -255,13 +312,16 @@ export class ToolExecutor {
    */
   async recordDirectContribution(
     ctx: OperationContext,
-    personId: string,
+    personId: string | undefined,
     displayName: string,
     amount: bigint,
     source: ProvenanceSource,
+    phone?: string,
   ): Promise<ExecutionResult> {
     const f = await this.fulfillments.recordDirectContribution(ctx, {
       personId,
+      displayName,
+      phone,
       value: amount,
       source,
     });

@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { EventRole, EventStatus, Prisma } from '@prisma/client';
 import { Actor, OperationContext, PermissionService, assertEventWritable } from '@akabbo/access';
 import { PrismaService } from '@akabbo/prisma';
@@ -67,6 +67,10 @@ export class EventService {
 
   async createEvent(actor: Actor, input: CreateEventInput): Promise<EventSummary> {
     const currency = input.currency ?? 'UGX';
+    // Plan gate (metering §10): the free tier covers ONE active event. This is
+    // keyed on the OWNER, so it can't be reset by a new login/token/conversation.
+    // A subscription raises the ceiling.
+    await this.assertCanCreateEvent(actor.userId);
 
     return this.tenant.runCreatingEvent(async (tx, setTenant) => {
       // `event` is not RLS-scoped, so it is inserted before the tenant is set.
@@ -111,6 +115,45 @@ export class EventService {
 
       return this.toSummary(event);
     });
+  }
+
+  /**
+   * Enforce the active-event ceiling for the owner's plan (metering §10). Free
+   * = 1 active event; an account subscription raises it (Organizer Pro → 5,
+   * Business → unlimited). CLOSED/ARCHIVED events don't count, so finishing one
+   * frees the slot. Blocks the "spin up unlimited free events" farming vector.
+   */
+  private async assertCanCreateEvent(userId: string): Promise<void> {
+    const max = await this.maxActiveEvents(userId);
+    if (max === null) return; // unlimited (Business)
+    const active = await this.prisma.event.count({
+      where: {
+        ownerUserId: userId,
+        status: { in: [EventStatus.DRAFT, EventStatus.ACTIVE, EventStatus.PAUSED] },
+      },
+    });
+    if (active >= max) {
+      throw new ForbiddenException(
+        max === 1
+          ? 'Your free plan covers 1 active event. Close it, upgrade it to a paid pack, or subscribe to run another.'
+          : `Your plan covers ${max} active events. Close one or upgrade to run more.`,
+      );
+    }
+  }
+
+  /** The owner's active-event ceiling: subscription raises it above the free 1. */
+  private async maxActiveEvents(userId: string): Promise<number | null> {
+    const grant = await this.prisma.entitlementGrant.findFirst({
+      where: {
+        account: { ownerUserId: userId },
+        status: { in: ['TRIALING', 'ACTIVE'] },
+        plan: { isSubscription: true },
+      },
+      orderBy: { plan: { priceMinor: 'desc' } },
+      select: { plan: { select: { code: true } } },
+    });
+    if (!grant) return 1; // free / per-event tier: one active event
+    return grant.plan.code === 'BUSINESS' ? null : 5; // Business unlimited; Pro → 5
   }
 
   /** Read the event's own record (metadata, not amounts). */

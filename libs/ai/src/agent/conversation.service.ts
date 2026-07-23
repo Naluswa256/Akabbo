@@ -24,7 +24,7 @@ const HISTORY_LIMIT = 20;
  */
 @Injectable()
 export class ConversationService {
-  constructor(private readonly prisma: PrismaService) { }
+  constructor(private readonly prisma: PrismaService) {}
 
   /** Load the caller's conversation, or start a fresh one. Ownership-checked. */
   async getOrCreate(actor: Actor, conversationId?: string): Promise<ConversationRef> {

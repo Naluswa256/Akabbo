@@ -67,9 +67,22 @@ describe('Phase 1.5a — identity foundation (integration)', () => {
     );
   });
 
+  /** Give an event a seat-bearing plan so invitations aren't blocked by the
+   *  FREE seat cap (metering §7). PREMIUM = unlimited seats. */
+  const grantSeats = async (eventId: string): Promise<void> => {
+    const plan = await prisma.plan.findUniqueOrThrow({
+      where: { code: 'PREMIUM' },
+      select: { id: true },
+    });
+    await prisma.entitlementGrant.create({
+      data: { eventId, planId: plan.id, status: 'ACTIVE' },
+    });
+  };
+
   it('invites a non-user who later authenticates and accepts → becomes a COORDINATOR', async () => {
     const owner = await makeUser();
     const event = await events.createEvent(owner, { name: 'Invite flow' });
+    await grantSeats(event.id);
     const ownerCtx = await ctxFor(owner, event.id);
 
     // Owner creates an invitation (no target account exists yet).
@@ -115,6 +128,7 @@ describe('Phase 1.5a — identity foundation (integration)', () => {
   it('accept is idempotent: an already-active member re-accepting is a no-op success', async () => {
     const owner = await makeUser();
     const event = await events.createEvent(owner, { name: 'Idempotent' });
+    await grantSeats(event.id);
     const ownerCtx = await ctxFor(owner, event.id);
     // Multi-use so the second accept is not blocked by use-count.
     const invite = await invitations.createInvitation(ownerCtx, {
@@ -139,6 +153,7 @@ describe('Phase 1.5a — identity foundation (integration)', () => {
   it('a revoked invitation cannot be accepted', async () => {
     const owner = await makeUser();
     const event = await events.createEvent(owner, { name: 'Revoke' });
+    await grantSeats(event.id);
     const ownerCtx = await ctxFor(owner, event.id);
     const invite = await invitations.createInvitation(ownerCtx, { role: EventRole.VIEWER });
     const inviteRow = await prisma.invitation.findUnique({
@@ -156,6 +171,7 @@ describe('Phase 1.5a — identity foundation (integration)', () => {
   it('a non-owner cannot create invitations (member:manage is owner/co-owner only)', async () => {
     const owner = await makeUser();
     const event = await events.createEvent(owner, { name: 'Perms' });
+    await grantSeats(event.id);
     const ownerCtx = await ctxFor(owner, event.id);
 
     const finance = await makeUser();

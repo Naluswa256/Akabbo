@@ -11,7 +11,7 @@ import { StubSmsProvider } from './sms/stub-sms.provider';
 import { UgSmsProvider } from './sms/ugsms.provider';
 import { PaymentProvider } from './payment/payment.provider';
 import { StubPaymentProvider } from './payment/stub-payment.provider';
-import { MudaTechProvider } from './payment/muda-payment.provider';
+import { MudaTechProvider, normalizeMudaOauthUrl } from './payment/muda-payment.provider';
 import { StorageProvider } from './storage/storage.provider';
 import { StubStorageProvider } from './storage/stub-storage.provider';
 import { LocalStorageProvider } from './storage/local-storage.provider';
@@ -75,8 +75,9 @@ function buildPaymentProvider(config: AppConfigService): PaymentProvider {
   if (config.get('PAYMENT_PROVIDER') !== 'muda') return new StubPaymentProvider();
   const clientId = config.get('MUDA_CLIENT_ID');
   const clientSecret = config.get('MUDA_CLIENT_SECRET');
-  const oauthUrl = config.get('MUDA_OAUTH_URL') || `${config.get('MUDA_BASE_URL')}/clients/oauth/token`;
-  if (!clientId || !clientSecret || !oauthUrl) return new StubPaymentProvider();
+  const baseUrl = config.get('MUDA_BASE_URL') || 'https://api.muda.tech/v1';
+  const oauthUrl = normalizeMudaOauthUrl(config.get('MUDA_OAUTH_URL'), baseUrl);
+  if (!clientId || !clientSecret) return new StubPaymentProvider();
   return new MudaTechProvider({
     baseUrl: config.get('MUDA_BASE_URL'),
     oauthUrl,

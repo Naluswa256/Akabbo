@@ -22,6 +22,14 @@ interface MudaCollectionResponse {
   data?: { trans_id?: string; transaction_id?: string; status?: string; reference_id?: string };
 }
 
+export function normalizeMudaOauthUrl(url?: string, baseUrl = 'https://api.muda.tech/v1'): string {
+  const base = baseUrl.replace(/\/$/, '');
+  if (!url || (url.includes('/oauth/') && !url.includes('/clients/oauth/'))) {
+    return `${base}/clients/oauth/token`;
+  }
+  return url;
+}
+
 /**
  * Muda.tech Mobile Money adapter — COLLECTIONS ONLY (metering doc §8). Akabbo
  * never holds contributor funds and never pays anyone out, so this implements
@@ -36,8 +44,14 @@ export class MudaTechProvider implements PaymentProvider {
   readonly name = 'muda';
   private readonly logger = new Logger(MudaTechProvider.name);
   private token: { value: string; expiresAt: number } | null = null;
+  private readonly config: MudaConfig;
 
-  constructor(private readonly config: MudaConfig) {}
+  constructor(config: MudaConfig) {
+    this.config = {
+      ...config,
+      oauthUrl: normalizeMudaOauthUrl(config.oauthUrl, config.baseUrl),
+    };
+  }
 
   /**
    * Initiate a direct-collection (PULL) — charges the payer's mobile wallet.

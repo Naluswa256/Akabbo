@@ -26,6 +26,7 @@ export interface CreateChargeResult {
   /** Redirect/collection URL or MoMo prompt reference. */
   authorizationUrl?: string;
   status: 'pending' | 'succeeded' | 'failed';
+  message?: string;
 }
 
 export interface PaymentWebhookEvent {

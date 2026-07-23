@@ -62,6 +62,7 @@ export class MudaTechProvider implements PaymentProvider {
     if (request.channel !== 'mobile_money' || !request.phone) {
       throw new Error('Muda collection requires a mobile_money channel and a payer phone');
     }
+    const cleanPhone = request.phone.replace(/\D/g, '');
     try {
       const token = await this.getToken();
       const res = await fetch(`${this.config.baseUrl}/payment/direct-collection`, {
@@ -69,7 +70,7 @@ export class MudaTechProvider implements PaymentProvider {
         headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify({
           product_id: this.config.collectionProductId,
-          phone: request.phone,
+          phone: cleanPhone,
           amount: String(request.amount),
           currency: request.currency,
           reference_id: request.reference,
@@ -83,7 +84,7 @@ export class MudaTechProvider implements PaymentProvider {
       if (!res.ok || (typeof bodyStatus === 'number' && (bodyStatus < 200 || bodyStatus >= 300))) {
         const message = body.message ?? `HTTP ${res.status}`;
         this.logger.error(`Muda collection failed (ref=${request.reference}): ${message}`);
-        return { providerChargeId: '', status: 'failed' };
+        return { providerChargeId: '', status: 'failed', message };
       }
 
       const trans_id = body.data?.trans_id ?? body.data?.transaction_id ?? '';
@@ -92,7 +93,7 @@ export class MudaTechProvider implements PaymentProvider {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.error(`Muda collection exception (ref=${request.reference}): ${msg}`);
-      return { providerChargeId: '', status: 'failed' };
+      return { providerChargeId: '', status: 'failed', message: msg };
     }
   }
 

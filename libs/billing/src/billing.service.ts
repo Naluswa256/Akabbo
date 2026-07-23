@@ -181,8 +181,9 @@ export class BillingService implements OnModuleInit {
     });
 
     if (charge.status === 'failed') {
-      throw new BadGatewayException(
-        'Payment collection could not be initiated at this time. Please check your phone number or try again.',
+      throw new BadRequestException(
+        charge.message ||
+          'Payment collection could not be initiated at this time. Please check your phone number and try again.',
       );
     }
 

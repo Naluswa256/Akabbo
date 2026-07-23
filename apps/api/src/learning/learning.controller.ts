@@ -6,13 +6,10 @@ import {
   Param,
   Post,
   Query,
-  UseGuards,
 } from '@nestjs/common';
 import { SelfLearningService, TelemetryService } from '@akabbo/ai';
-import { AuthGuard } from '../auth/auth.guard';
 
 @Controller('ai/learning')
-@UseGuards(AuthGuard)
 export class LearningController {
   constructor(
     private readonly selfLearning: SelfLearningService,
@@ -20,7 +17,10 @@ export class LearningController {
   ) {}
 
   private assertAdminSecret(secretHeader?: string): void {
-    const adminSecret = process.env.ADMIN_SECRET || 'akabbo-admin-secret-dev';
+    const adminSecret = process.env.ADMIN_SECRET;
+    if (!adminSecret) {
+      throw new ForbiddenException('Self-learning surface is not configured (ADMIN_SECRET unset)');
+    }
     if (!secretHeader || secretHeader !== adminSecret) {
       throw new ForbiddenException('Invalid admin secret key for self-learning surface');
     }

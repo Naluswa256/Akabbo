@@ -1173,3 +1173,52 @@ model SchemaHealth {
 
   @@map("_schema_health")
 }
+
+// ─── Self-Learning Telemetry & Reflection Models ─────────────────────────────
+
+/// Detailed trace of an AI turn (prompt, model output, tools used, resolution).
+model AiInteractionTrace {
+  id             String   @id @default(uuid()) @db.Uuid
+  conversationId String?  @map("conversation_id") @db.Uuid
+  eventId        String?  @map("event_id") @db.Uuid
+  userId         String?  @map("user_id") @db.Uuid
+  userPrompt     String   @map("user_prompt")
+  modelResponse  String?  @map("model_response")
+  toolCallsJson  String?  @map("tool_calls_json")
+  stagedStatus   String?  @map("staged_status")
+  userRole       String?  @map("user_role")
+  latencyMs      Int?     @map("latency_ms")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@index([eventId])
+  @@index([userId])
+  @@index([conversationId])
+  @@map("ai_interaction_trace")
+}
+
+/// Offline reflection log created by the evaluator loop.
+model AiReflectionLog {
+  id                  String   @id @default(uuid()) @db.Uuid
+  evaluatedTurnsCount Int      @map("evaluated_turns_count")
+  insightsSummary     String   @map("insights_summary")
+  identifiedGaps      String?  @map("identified_gaps")
+  createdAt           DateTime @default(now()) @map("created_at")
+
+  @@map("ai_reflection_log")
+}
+
+/// Distilled exemplar or phrasing guidance injected into the AI system prompt.
+model AiLearnedExemplar {
+  id                String   @id @default(uuid()) @db.Uuid
+  category          String
+  triggerKeywords   String[] @map("trigger_keywords")
+  userPromptPattern String   @map("user_prompt_pattern")
+  learnedGuidance   String   @map("learned_guidance")
+  confidenceScore   Float    @default(1.0) @map("confidence_score")
+  status            String   @default("APPROVED")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@index([category])
+  @@map("ai_learned_exemplar")
+}

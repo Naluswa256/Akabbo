@@ -13,6 +13,9 @@ import { AiMutationService } from './agent/ai-mutation.service';
 import { AssistantService } from './agent/assistant.service';
 import { ConversationService } from './agent/conversation.service';
 import { ConversationOrchestrator } from './agent/conversation-orchestrator.service';
+import { TelemetryService } from './telemetry.service';
+import { DynamicContextService } from './dynamic-context.service';
+import { SelfLearningService } from './self-learning.service';
 
 /**
  * The AI capture context (Phase 2). NOT a bounded context — an application-layer
@@ -33,6 +36,9 @@ import { ConversationOrchestrator } from './agent/conversation-orchestrator.serv
     AssistantService,
     ConversationService,
     ConversationOrchestrator,
+    TelemetryService,
+    DynamicContextService,
+    SelfLearningService,
   ],
   // UsageMeter is exported so the Documents context meters multimodal
   // extraction through the one meter (blueprint §5 usage accounting).
@@ -44,6 +50,9 @@ import { ConversationOrchestrator } from './agent/conversation-orchestrator.serv
     AssistantService,
     ConversationService,
     ConversationOrchestrator,
+    TelemetryService,
+    DynamicContextService,
+    SelfLearningService,
   ],
 })
 export class AiModule {}

@@ -18,6 +18,8 @@ import { AiQueryService } from './ai-query.service';
 import { AiMutationService, StageResult } from './ai-mutation.service';
 import { AgentSession } from './agent-session';
 import { currentDateNote } from '../date-context';
+import { TelemetryService } from '../telemetry.service';
+import { DynamicContextService } from '../dynamic-context.service';
 
 type Dispatch = (name: string, args: Record<string, unknown>) => Promise<ToolOutcome>;
 interface ToolOutcome {
@@ -61,7 +63,13 @@ export class AssistantService {
     private readonly meter: UsageMeter,
     private readonly entitlements: EntitlementService,
     private readonly billing: BillingService,
+    private readonly telemetry: TelemetryService,
+    private readonly dynamicContext: DynamicContextService,
   ) {}
+
+  async onModuleInit(): Promise<void> {
+    await this.dynamicContext.seedInitialExemplars();
+  }
 
   /** Map a resolve-and-stage outcome to a tool result the model narrates. */
   private staged(result: StageResult): ToolOutcome {
@@ -79,6 +87,8 @@ export class AssistantService {
       () => ctx.event.eventId,
       message,
       history,
+      ctx.event.role,
+      ctx.actor.userId,
     );
   }
 
@@ -114,7 +124,10 @@ export class AssistantService {
     meterEventId: () => string | null,
     message: string,
     history: LlmMessage[],
+    userRole?: string,
+    userId?: string,
   ): Promise<ChatResult> {
+    const startTime = Date.now();
     const initialEventId = meterEventId();
     const scope = initialEventId ? { eventId: initialEventId } : {};
     const check = await this.entitlements.check(scope, 'use_ai');
@@ -125,12 +138,19 @@ export class AssistantService {
       );
     }
 
+    const learnedPromptContext = await this.dynamicContext.getRelevantContext(message);
+
+    const systemPromptContent = learnedPromptContext
+      ? `${SYSTEM_PROMPT}\n\n${learnedPromptContext}\n\n${currentDateNote()}`
+      : `${SYSTEM_PROMPT}\n\n${currentDateNote()}`;
+
     const messages: LlmMessage[] = [
-      { role: 'system', content: `${SYSTEM_PROMPT}\n\n${currentDateNote()}` },
+      { role: 'system', content: systemPromptContent },
       ...history,
       { role: 'user', content: message },
     ];
     const staged: string[] = [];
+    const allToolCalls: unknown[] = [];
 
     for (let step = 1; step <= MAX_STEPS; step += 1) {
       const result = await this.llm.complete({ messages, tools, temperature: 0 });
@@ -146,13 +166,27 @@ export class AssistantService {
         const finalEventId = meterEventId() ?? initialEventId;
         const finalScope = finalEventId ? { eventId: finalEventId } : {};
         await this.billing.deductAiCredit(finalScope, `turn:${randomUUID()}`);
-        return { reply: result.text ?? '', staged, steps: step };
+        
+        const reply = result.text ?? '';
+        void this.telemetry.recordTrace({
+          eventId: finalEventId || undefined,
+          userId,
+          userPrompt: message,
+          modelResponse: reply,
+          toolCallsJson: allToolCalls.length > 0 ? JSON.stringify(allToolCalls) : undefined,
+          stagedStatus: staged.length > 0 ? 'CONFIRMED' : 'NONE',
+          userRole,
+          latencyMs: Date.now() - startTime,
+        });
+
+        return { reply, staged, steps: step };
       }
 
       // Echo the model's tool calls, then feed back each result.
       messages.push({ role: 'assistant', content: result.text ?? '', toolCalls: result.toolCalls });
       const toolResults: LlmToolResult[] = [];
       for (const call of result.toolCalls) {
+        allToolCalls.push({ name: call.name, args: call.arguments });
         const { content, pendingId } = await dispatch(call.name, call.arguments);
         if (pendingId) staged.push(pendingId);
         toolResults.push({ id: call.id, name: call.name, content });

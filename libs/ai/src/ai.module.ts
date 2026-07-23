@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { LedgerModule } from '@akabbo/ledger';
 import { TransparencyModule } from '@akabbo/transparency';
 import { CommsModule } from '@akabbo/comms';
+import { BillingModule } from '@akabbo/billing';
 import { EntityResolver } from './entity-resolver.service';
 import { ToolExecutor } from './tool-executor.service';
 import { ConfirmationService } from './confirmation.service';
@@ -20,7 +21,7 @@ import { ConversationOrchestrator } from './agent/conversation-orchestrator.serv
  * LLM_PROVIDER (global, from ProvidersModule).
  */
 @Module({
-  imports: [LedgerModule, TransparencyModule, CommsModule],
+  imports: [LedgerModule, TransparencyModule, CommsModule, BillingModule],
   providers: [
     EntityResolver,
     ToolExecutor,

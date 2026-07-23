@@ -1,5 +1,7 @@
+import { randomUUID } from 'node:crypto';
 import { ForbiddenException, Inject, Injectable, Logger } from '@nestjs/common';
-import { OperationContext } from '@akabbo/access';
+import { EntitlementService, OperationContext } from '@akabbo/access';
+import { BillingService } from '@akabbo/billing';
 import {
   LLM_PROVIDER,
   LlmMessage,
@@ -57,6 +59,8 @@ export class AssistantService {
     private readonly capture: CaptureService,
     private readonly mutations: AiMutationService,
     private readonly meter: UsageMeter,
+    private readonly entitlements: EntitlementService,
+    private readonly billing: BillingService,
   ) {}
 
   /** Map a resolve-and-stage outcome to a tool result the model narrates. */
@@ -111,6 +115,16 @@ export class AssistantService {
     message: string,
     history: LlmMessage[],
   ): Promise<ChatResult> {
+    const initialEventId = meterEventId();
+    const scope = initialEventId ? { eventId: initialEventId } : {};
+    const check = await this.entitlements.check(scope, 'use_ai');
+    if (!check.allowed) {
+      throw new ForbiddenException(
+        check.message ??
+          'Chat feature locked — 0 AI credits remaining. Purchase an AI Top-Up or upgrade your plan to continue using conversational features.',
+      );
+    }
+
     const messages: LlmMessage[] = [
       { role: 'system', content: `${SYSTEM_PROMPT}\n\n${currentDateNote()}` },
       ...history,
@@ -129,6 +143,9 @@ export class AssistantService {
 
       // No tool call → the model produced its final grounded answer.
       if (result.toolCalls.length === 0) {
+        const finalEventId = meterEventId() ?? initialEventId;
+        const finalScope = finalEventId ? { eventId: finalEventId } : {};
+        await this.billing.deductAiCredit(finalScope, `turn:${randomUUID()}`);
         return { reply: result.text ?? '', staged, steps: step };
       }
 

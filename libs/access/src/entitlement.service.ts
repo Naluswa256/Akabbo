@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { GrantStatus, InvitationStatus, MembershipStatus } from '@prisma/client';
 import { PrismaService } from '@akabbo/prisma';
+import { PLAN_CATALOG } from '@akabbo/config';
 
 /**
  * Derive the team-seat allowance from a plan's feature flags (metering §4/§7:
@@ -27,7 +28,12 @@ export interface EntitlementScope {
  * plan permit / can you afford it?" rather than "are you allowed?".
  */
 export type EntitlementAction =
-  'add_contributor' | 'add_member' | 'create_pledge' | 'record_fulfillment' | 'send_sms';
+  | 'add_contributor'
+  | 'add_member'
+  | 'create_pledge'
+  | 'record_fulfillment'
+  | 'send_sms'
+  | 'use_ai';
 
 export interface EntitlementDecision {
   allowed: boolean;
@@ -48,6 +54,10 @@ export interface ResolvedEntitlement {
   features: string[];
   /** Current SMS-credit balance for the scope (SUM of the append-only ledger). */
   smsBalance: number;
+  /** Current AI-credit balance for the scope (SUM of the append-only AI credit ledger). */
+  aiBalance: number;
+  /** Total bundled AI credits for the scope's plan. */
+  maxAiCredits: number;
 }
 
 /**
@@ -80,6 +90,18 @@ export class EntitlementService {
     }
 
     const ent = await this.resolve(scope);
+
+    if (action === 'use_ai') {
+      if (ent.aiBalance < quantity) {
+        return {
+          allowed: false,
+          reason: 'ai_credits',
+          message:
+            'Chat feature locked — 0 AI credits remaining. Purchase an AI Top-Up or upgrade your plan to continue using conversational features.',
+        };
+      }
+      return { allowed: true };
+    }
 
     if (action === 'add_contributor') {
       if (ent.maxContributors === null) return { allowed: true };
@@ -128,6 +150,7 @@ export class EntitlementService {
     const grant = await this.activeGrant(scope);
     const plan = grant ? await this.plan(grant.planCode) : await this.plan('FREE');
     const smsBalance = await this.smsBalance(scope);
+    const aiBalance = await this.aiBalance(scope);
     return {
       planCode: plan.code,
       status: grant?.status ?? GrantStatus.TRIALING,
@@ -135,6 +158,8 @@ export class EntitlementService {
       maxSeats: seatsFromFeatures(plan.features),
       features: plan.features,
       smsBalance,
+      aiBalance,
+      maxAiCredits: plan.includedAiCredits,
     };
   }
 
@@ -182,6 +207,14 @@ export class EntitlementService {
     return agg._sum.amount ?? 0;
   }
 
+  private async aiBalance(scope: EntitlementScope): Promise<number> {
+    const agg = await this.prisma.aiCreditLedger.aggregate({
+      where: scope.eventId ? { eventId: scope.eventId } : { accountId: scope.accountId },
+      _sum: { amount: true },
+    });
+    return agg._sum.amount ?? 0;
+  }
+
   /** Count contributors within the event's RLS scope (own short transaction). */
   private countContributors(eventId: string): Promise<number> {
     return this.prisma.$transaction(async (tx) => {
@@ -194,19 +227,34 @@ export class EntitlementService {
   private async plan(code: string): Promise<PlanRow> {
     if (!this.planCache) {
       const rows = await this.prisma.plan.findMany({
-        select: { code: true, maxContributors: true, features: true },
+        select: {
+          code: true,
+          maxContributors: true,
+          features: true,
+          includedSmsCredits: true,
+          includedAiCredits: true,
+        },
       });
       this.planCache = new Map(rows.map((r) => [r.code, r]));
     }
     const found = this.planCache.get(code);
-    // FREE must exist (seeded); if a code is somehow missing, fall back to a
-    // conservative cap rather than unlimited.
-    return found ?? { code, maxContributors: 25, features: [] };
+    const config = PLAN_CATALOG[code] ?? PLAN_CATALOG.FREE;
+    return (
+      found ?? {
+        code: config.code,
+        maxContributors: config.maxContributors,
+        includedSmsCredits: config.includedSmsCredits,
+        includedAiCredits: config.includedAiCredits,
+        features: config.features,
+      }
+    );
   }
 }
 
 interface PlanRow {
   code: string;
   maxContributors: number | null;
+  includedSmsCredits: number;
+  includedAiCredits: number;
   features: string[];
 }

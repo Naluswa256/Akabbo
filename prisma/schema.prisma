@@ -992,6 +992,8 @@ model Plan {
   maxContributors    Int?      @map("max_contributors")
   /// SMS credits granted when this plan is activated (metering doc §6).
   includedSmsCredits Int       @default(0) @map("included_sms_credits")
+  /// AI credits granted when this plan is activated.
+  includedAiCredits  Int       @default(0) @map("included_ai_credits")
   /// Feature flags this plan unlocks (e.g. unwatermarked_reports, sender_id).
   features           String[]
   /// True for recurring subscription plans (§5); false for one-off packs (§4).
@@ -1051,6 +1053,32 @@ model SmsCreditLedger {
   @@index([eventId])
   @@index([accountId])
   @@map("sms_credit_ledger")
+}
+
+enum AiLedgerKind {
+  GRANT
+  DEDUCT
+  REFUND
+}
+
+/// APPEND-ONLY AI-credit ledger — Universal AI Usage Caps Across All Plans.
+/// Balance = SUM(amount) per scope. Every turn checks balance > 0; when 0, chat locks.
+model AiCreditLedger {
+  id             String       @id @default(uuid()) @db.Uuid
+  /// The billing scope holding the balance (event OR account).
+  eventId        String?      @map("event_id") @db.Uuid
+  accountId      String?      @map("account_id") @db.Uuid
+  kind           AiLedgerKind
+  /// Signed credit count: +grant, −deduct, +refund.
+  amount         Int
+  /// Ties the movement to its origin (turn id / invoice); unique so a retry is a no-op.
+  idempotencyKey String       @unique @map("idempotency_key")
+  reference      String?
+  createdAt      DateTime     @default(now()) @map("created_at")
+
+  @@index([eventId])
+  @@index([accountId])
+  @@map("ai_credit_ledger")
 }
 
 /// A SaaS-fee charge + its settlement (metering doc §7.1, §8). Created PENDING

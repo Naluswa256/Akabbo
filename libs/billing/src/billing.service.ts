@@ -1,8 +1,9 @@
 import { randomBytes } from 'node:crypto';
-import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
-import { GrantStatus, InvoiceStatus, SmsLedgerKind } from '@prisma/client';
+import { BadRequestException, Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { GrantStatus, InvoiceStatus, SmsLedgerKind, AiLedgerKind } from '@prisma/client';
 import { EntitlementScope, EntitlementService, ResolvedEntitlement } from '@akabbo/access';
 import { PrismaService } from '@akabbo/prisma';
+import { PLAN_CATALOG } from '@akabbo/config';
 import {
   CreateChargeResult,
   PAYMENT_PROVIDER,
@@ -25,7 +26,7 @@ const FREE_TRIAL_SMS = 30;
  * two pre-action gates stay in @akabbo/access; this service reuses it.
  */
 @Injectable()
-export class BillingService {
+export class BillingService implements OnModuleInit {
   private readonly logger = new Logger(BillingService.name);
 
   constructor(
@@ -33,6 +34,46 @@ export class BillingService {
     private readonly entitlements: EntitlementService,
     @Inject(PAYMENT_PROVIDER) private readonly payments: PaymentProvider,
   ) {}
+
+  async onModuleInit(): Promise<void> {
+    try {
+      await this.syncPlanCatalog();
+    } catch (err) {
+      this.logger.warn(`Plan catalog sync skipped: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  /** Keep PostgreSQL `plan` table synchronized with single configurable `PLAN_CATALOG`. */
+  async syncPlanCatalog(): Promise<void> {
+    for (const config of Object.values(PLAN_CATALOG)) {
+      await this.prisma.plan.upsert({
+        where: { code: config.code },
+        create: {
+          code: config.code,
+          name: config.name,
+          scope: config.scope,
+          priceMinor: config.priceMinor,
+          currency: config.currency,
+          maxContributors: config.maxContributors,
+          includedSmsCredits: config.includedSmsCredits,
+          includedAiCredits: config.includedAiCredits,
+          features: config.features,
+          isSubscription: config.isSubscription,
+        },
+        update: {
+          name: config.name,
+          scope: config.scope,
+          priceMinor: config.priceMinor,
+          currency: config.currency,
+          maxContributors: config.maxContributors,
+          includedSmsCredits: config.includedSmsCredits,
+          includedAiCredits: config.includedAiCredits,
+          features: config.features,
+          isSubscription: config.isSubscription,
+        },
+      });
+    }
+  }
 
   resolveEntitlement(scope: EntitlementScope): Promise<ResolvedEntitlement> {
     return this.entitlements.resolve(scope);
@@ -63,12 +104,18 @@ export class BillingService {
       create: { eventId, planId: free.id, status: GrantStatus.TRIALING },
       update: {},
     });
-    // 30 free credits, once — idempotency key ties it to the event.
+    // 30 free SMS credits + 50 free AI credits, once — idempotency key ties it to the event.
     await this.grantCredits(
       { eventId },
       FREE_TRIAL_SMS,
       `trial-sms:${eventId}`,
-      'free trial allowance',
+      'free trial SMS allowance',
+    );
+    await this.grantAiCredits(
+      { eventId },
+      free.includedAiCredits || 50,
+      `trial-ai:${eventId}`,
+      'free trial AI allowance',
     );
   }
 
@@ -139,7 +186,7 @@ export class BillingService {
    * Apply a payment webhook (metering §7.4, §8) — the SOURCE OF TRUTH for grants.
    * Idempotent on the gateway transaction id: a duplicated webhook is a no-op.
    * On success: mark the invoice PAID, activate the entitlement grant for its
-   * scope, and grant the plan's included SMS credits. On failure: mark FAILED.
+   * scope, and grant the plan's included SMS & AI credits. On failure: mark FAILED.
    */
   async applyPaymentWebhook(evt: PaymentWebhookEvent): Promise<{ applied: boolean }> {
     const invoice = await this.prisma.invoice.findUnique({
@@ -150,7 +197,6 @@ export class BillingService {
       this.logger.warn(`Webhook for unknown reference ${evt.reference}`);
       return { applied: false };
     }
-    // Already settled with this gateway txn → idempotent no-op.
     if (invoice.status === InvoiceStatus.PAID) return { applied: false };
 
     if (evt.status === 'failed') {
@@ -173,7 +219,6 @@ export class BillingService {
         ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
         : null;
       if (invoice.eventId) {
-        // Upgrade the event's grant in place (FREE trial → paid pack).
         await tx.entitlementGrant.upsert({
           where: { eventId: invoice.eventId },
           create: {
@@ -199,7 +244,6 @@ export class BillingService {
           },
         });
       }
-      // Grant the plan's included SMS credits (idempotent on the invoice).
       if (plan.includedSmsCredits > 0) {
         await tx.smsCreditLedger.create({
           data: {
@@ -212,13 +256,24 @@ export class BillingService {
           },
         });
       }
+      if (plan.includedAiCredits > 0) {
+        await tx.aiCreditLedger.create({
+          data: {
+            eventId: invoice.eventId ?? null,
+            accountId: invoice.eventId ? null : invoice.billingAccountId,
+            kind: AiLedgerKind.GRANT,
+            amount: plan.includedAiCredits,
+            idempotencyKey: `invoice-ai:${invoice.id}`,
+            reference: evt.reference,
+          },
+        });
+      }
     });
     return { applied: true };
   }
 
-  // ── SMS credit ledger (metering §6) — append-only, reserve/commit/refund ──────
+  // ── SMS credit ledger (metering §6) — append-only ─────────────────────────────
 
-  /** Add credits (purchase/top-up/free grant). Idempotent on the key. */
   async grantCredits(
     scope: EntitlementScope,
     amount: number,
@@ -228,10 +283,6 @@ export class BillingService {
     await this.append(scope, SmsLedgerKind.GRANT, amount, idempotencyKey, reference);
   }
 
-  /**
-   * Reserve credits before a send (metering §6). Fails closed if the balance
-   * would go negative — never send SMS you can't pay for.
-   */
   async reserve(
     scope: EntitlementScope,
     count: number,
@@ -243,12 +294,10 @@ export class BillingService {
     return { ok: true, balance: balance - count };
   }
 
-  /** Mark a reservation delivered (0-amount marker linked to the reservation). */
   async commit(scope: EntitlementScope, reserveKey: string): Promise<void> {
     await this.append(scope, SmsLedgerKind.COMMIT, 0, `commit:${reserveKey}`, reserveKey);
   }
 
-  /** Refund a reserved credit when the provider rejected the message (§6). */
   async refund(scope: EntitlementScope, count: number, reserveKey: string): Promise<void> {
     await this.append(scope, SmsLedgerKind.REFUND, count, `refund:${reserveKey}`, reserveKey);
   }
@@ -276,10 +325,61 @@ export class BillingService {
         },
       });
     } catch (err) {
-      // Unique-violation on the key → already applied → no-op (idempotent).
       if (isUniqueViolation(err)) return;
       throw err;
     }
+  }
+
+  // ── AI credit ledger — Universal AI Usage Caps ────────────────────────────────
+
+  async grantAiCredits(
+    scope: EntitlementScope,
+    amount: number,
+    idempotencyKey: string,
+    reference?: string,
+  ): Promise<void> {
+    try {
+      await this.prisma.aiCreditLedger.create({
+        data: {
+          eventId: scope.eventId ?? null,
+          accountId: scope.accountId ?? null,
+          kind: AiLedgerKind.GRANT,
+          amount,
+          idempotencyKey,
+          reference: reference ?? null,
+        },
+      });
+    } catch (err) {
+      if (isUniqueViolation(err)) return;
+      throw err;
+    }
+  }
+
+  /** Deduct 1 AI credit from the scope (idempotent on turn key). */
+  async deductAiCredit(
+    scope: EntitlementScope,
+    idempotencyKey: string,
+    reference?: string,
+  ): Promise<void> {
+    try {
+      await this.prisma.aiCreditLedger.create({
+        data: {
+          eventId: scope.eventId ?? null,
+          accountId: scope.accountId ?? null,
+          kind: AiLedgerKind.DEDUCT,
+          amount: -1,
+          idempotencyKey,
+          reference: reference ?? null,
+        },
+      });
+    } catch (err) {
+      if (isUniqueViolation(err)) return;
+      throw err;
+    }
+  }
+
+  aiBalance(scope: EntitlementScope): Promise<number> {
+    return this.entitlements.resolve(scope).then((e) => e.aiBalance);
   }
 
   // ── plan catalog helpers ──────────────────────────────────────────────────────
@@ -304,6 +404,7 @@ interface PlanRow {
   priceMinor: bigint;
   currency: string;
   includedSmsCredits: number;
+  includedAiCredits: number;
   isSubscription: boolean;
 }
 

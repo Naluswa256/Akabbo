@@ -36,6 +36,7 @@ export interface PublicInvitationView {
   role: EventRole;
   status: InvitationStatus;
   valid: boolean;
+  invitedPhone?: string;
 }
 
 const DEFAULT_TTL_SECONDS = 7 * 24 * 60 * 60;
@@ -90,11 +91,23 @@ export class InvitationService {
   async getByToken(token: string): Promise<PublicInvitationView> {
     const inv = await this.prisma.invitation.findUnique({
       where: { token },
-      select: { role: true, status: true, expiresAt: true, event: { select: { name: true } } },
+      select: {
+        role: true,
+        status: true,
+        expiresAt: true,
+        invitedPhone: true,
+        event: { select: { name: true } },
+      },
     });
     if (!inv) throw new NotFoundException('Invitation not found');
     const valid = inv.status === InvitationStatus.PENDING && inv.expiresAt.getTime() > Date.now();
-    return { eventName: inv.event.name, role: inv.role, status: inv.status, valid };
+    return {
+      eventName: inv.event.name,
+      role: inv.role,
+      status: inv.status,
+      valid,
+      invitedPhone: inv.invitedPhone ?? undefined,
+    };
   }
 
   /**

@@ -134,7 +134,7 @@ describe('Billing & Entitlements (integration)', () => {
       'STARTER',
       '+256770000001',
     );
-    expect(payments.lastCharge?.amount).toBe(50000);
+    expect(payments.lastCharge?.amount).toBe(10000);
 
     let invoice = await prisma.invoice.findUniqueOrThrow({ where: { reference } });
     expect(invoice.status).toBe('PENDING');
@@ -144,7 +144,7 @@ describe('Billing & Entitlements (integration)', () => {
       gatewayTransactionId: 'gw_tx_1',
       reference,
       status: 'succeeded' as const,
-      amount: 50000,
+      amount: 10000,
       currency: 'UGX',
     };
     const first = await billing.applyPaymentWebhook(evt);
@@ -170,7 +170,7 @@ describe('Billing & Entitlements (integration)', () => {
       gatewayTransactionId: 'gw_tx_2',
       reference,
       status: 'succeeded',
-      amount: 100000,
+      amount: 30000,
       currency: 'UGX',
     });
     const account = await prisma.billingAccount.findFirstOrThrow({

@@ -1,8 +1,9 @@
 /**
  * SINGLE CONFIGURABLE PLACE FOR ALL PLAN ENTITLEMENT LIMITS AND BUNDLED CREDITS.
  *
- * To change Max Contributors, Included SMS Credits, or Included AI Credits for any plan,
- * update the limits in this catalog.
+ * Uganda-First Pricing Strategy:
+ * Lower impulse-price thresholds (UGX 10k / 30k / 60k) designed for mass adoption
+ * and behavioral change replacing WhatsApp chaos.
  */
 
 export interface PlanConfig {
@@ -35,7 +36,7 @@ export const PLAN_CATALOG: Record<string, PlanConfig> = {
     code: 'STARTER',
     name: 'Starter Pack',
     scope: 'EVENT',
-    priceMinor: 50_000n,
+    priceMinor: 10_000n,
     currency: 'UGX',
     maxContributors: 100,
     includedSmsCredits: 300,
@@ -47,7 +48,7 @@ export const PLAN_CATALOG: Record<string, PlanConfig> = {
     code: 'STANDARD',
     name: 'Standard Pack',
     scope: 'EVENT',
-    priceMinor: 120_000n,
+    priceMinor: 30_000n,
     currency: 'UGX',
     maxContributors: 300,
     includedSmsCredits: 1000,
@@ -59,7 +60,7 @@ export const PLAN_CATALOG: Record<string, PlanConfig> = {
     code: 'PREMIUM',
     name: 'Premium Pack',
     scope: 'EVENT',
-    priceMinor: 250_000n,
+    priceMinor: 60_000n,
     currency: 'UGX',
     maxContributors: 1000,
     includedSmsCredits: 3000,
@@ -71,7 +72,7 @@ export const PLAN_CATALOG: Record<string, PlanConfig> = {
     code: 'ORGANIZER_PRO',
     name: 'Organizer Pro Subscription',
     scope: 'ACCOUNT',
-    priceMinor: 200_000n,
+    priceMinor: 30_000n,
     currency: 'UGX',
     maxContributors: 500,
     includedSmsCredits: 2000,
@@ -83,7 +84,7 @@ export const PLAN_CATALOG: Record<string, PlanConfig> = {
     code: 'BUSINESS',
     name: 'Business Subscription',
     scope: 'ACCOUNT',
-    priceMinor: 500_000n,
+    priceMinor: 120_000n,
     currency: 'UGX',
     maxContributors: null,
     includedSmsCredits: 5000,

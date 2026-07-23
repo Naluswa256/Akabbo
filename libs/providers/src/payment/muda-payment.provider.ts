@@ -22,6 +22,17 @@ interface MudaCollectionResponse {
   data?: { trans_id?: string; transaction_id?: string; status?: string; reference_id?: string };
 }
 
+export function formatMudaPhone(phone: string): string {
+  const digits = phone.replace(/\D/g, '');
+  if (digits.startsWith('0') && digits.length === 10) {
+    return `256${digits.slice(1)}`;
+  }
+  if (digits.length === 9 && (digits.startsWith('7') || digits.startsWith('3'))) {
+    return `256${digits}`;
+  }
+  return digits;
+}
+
 export function normalizeMudaOauthUrl(url?: string, baseUrl = 'https://api.muda.tech/v1'): string {
   const base = baseUrl.replace(/\/$/, '');
   if (!url || (url.includes('/oauth/') && !url.includes('/clients/oauth/'))) {
@@ -62,7 +73,7 @@ export class MudaTechProvider implements PaymentProvider {
     if (request.channel !== 'mobile_money' || !request.phone) {
       throw new Error('Muda collection requires a mobile_money channel and a payer phone');
     }
-    const cleanPhone = request.phone.replace(/\D/g, '');
+    const cleanPhone = formatMudaPhone(request.phone);
     try {
       const token = await this.getToken();
       const res = await fetch(`${this.config.baseUrl}/payment/direct-collection`, {

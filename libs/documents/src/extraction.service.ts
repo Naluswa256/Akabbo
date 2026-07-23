@@ -84,11 +84,27 @@ export class ExtractionService {
       const parsed = extractBudgetResult.safeParse(raw?.arguments ?? {});
       const items = parsed.success ? parsed.data.items : [];
       const confidence = parsed.success ? parsed.data.confidence : undefined;
+      const documentTitle = parsed.success ? parsed.data.document_title : undefined;
+      const currency = parsed.success ? parsed.data.currency : 'UGX';
+      const notes = parsed.success ? parsed.data.notes : undefined;
 
       // Normalise amounts; drop anything that isn't a real figure.
       const normalized = items
-        .map((it) => ({ name: it.name, amount: parseAmountToMinorUnits(String(it.amount)) }))
-        .filter((it): it is { name: string; amount: bigint } => it.amount !== null);
+        .map((it) => {
+          const amt = parseAmountToMinorUnits(String(it.amount));
+          if (amt === null) return null;
+          return {
+            name: it.name,
+            amount: amt,
+            quantity: it.quantity ?? null,
+            unitCost: it.unit_cost ? parseAmountToMinorUnits(String(it.unit_cost))?.toString() ?? null : null,
+            categoryContext: it.category_context ?? null,
+            conceptType: it.concept_type ?? null,
+            fulfillmentStatus: it.fulfillment_status ?? 'unknown',
+            isPartiallyIllegible: it.is_partially_illegible ?? false,
+          };
+        })
+        .filter((it): it is NonNullable<typeof it> => it !== null);
 
       const proposedItems = await this.tenant.runInEvent(eventId, async (tx) => {
         await tx.extraction.create({
@@ -97,7 +113,19 @@ export class ExtractionService {
             documentId,
             kind: 'BUDGET',
             structured: {
-              items: normalized.map((n) => ({ name: n.name, amount: n.amount.toString() })),
+              documentTitle,
+              currency,
+              notes,
+              items: normalized.map((n) => ({
+                name: n.name,
+                amount: n.amount.toString(),
+                quantity: n.quantity,
+                unitCost: n.unitCost,
+                categoryContext: n.categoryContext,
+                conceptType: n.conceptType,
+                fulfillmentStatus: n.fulfillmentStatus,
+                isPartiallyIllegible: n.isPartiallyIllegible,
+              })),
             },
             confidence: confidence ?? null,
             model: result.usage.model,
@@ -112,6 +140,17 @@ export class ExtractionService {
             targetValue: item.amount.toString(),
             sourceDocumentId: documentId,
           };
+
+          const details = [
+            item.quantity ? `Qty: ${item.quantity}` : null,
+            item.categoryContext ? `Category: ${item.categoryContext}` : null,
+            item.fulfillmentStatus && item.fulfillmentStatus !== 'unknown' ? `Status: ${item.fulfillmentStatus}` : null,
+          ].filter(Boolean).join(', ');
+
+          const promptText = details
+            ? `I read a budget line “${item.name}” (${details}) of UGX ${item.amount.toString()} — add it?`
+            : `I read a budget line “${item.name}” of UGX ${item.amount.toString()} — add it?`;
+
           await tx.pendingConfirmation.create({
             data: {
               eventId,
@@ -119,7 +158,7 @@ export class ExtractionService {
               payload: action as unknown as Prisma.InputJsonValue,
               confidence: confidence ?? null,
               source: ProvenanceSource.ai_from_document,
-              prompt: `I read a budget line “${item.name}” of ${item.amount.toString()} — add it?`,
+              prompt: promptText,
               createdById: doc.uploadedById,
             },
           });

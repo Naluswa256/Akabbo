@@ -59,10 +59,33 @@ export class AiMutationService {
     };
   }
 
-  /** Publish a drafted announcement — the SIDE EFFECT that makes it public. */
-  async publishAnnouncement(ctx: OperationContext, announcementId: string): Promise<StageResult> {
+  /** Publish a drafted announcement — the SIDE EFFECT that makes it public, with optional SMS broadcast. */
+  async publishAnnouncement(
+    ctx: OperationContext,
+    announcementId: string,
+    sendSms = false,
+  ): Promise<StageResult> {
     if (!announcementId.trim()) return clarify('Which announcement should I publish?');
     const a = await this.announcements.publish(ctx, announcementId.trim());
+
+    if (sendSms) {
+      try {
+        const smsResult = await this.sms.sendAnnouncement(ctx, a.body);
+        return {
+          status: 'done',
+          message: `Published the announcement to the public event page and queued SMS broadcast to ${smsResult.queued} contributor(s)${smsResult.skipped > 0 ? ` (${smsResult.skipped} skipped due to SMS credit limit)` : ''}.`,
+          data: { ...a, smsResult },
+        };
+      } catch (err) {
+        const errStr = err instanceof Error ? err.message : String(err);
+        return {
+          status: 'done',
+          message: `Published the announcement to the public event page. (SMS broadcast could not be sent: ${errStr})`,
+          data: a,
+        };
+      }
+    }
+
     return {
       status: 'done',
       message: 'Published the announcement to the public event page.',

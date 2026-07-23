@@ -324,7 +324,11 @@ export class AssistantService {
           return this.staged(await this.mutations.draftAnnouncement(ctx, String(args.body ?? '')));
         case 'publish_announcement':
           return this.staged(
-            await this.mutations.publishAnnouncement(ctx, String(args.announcementId ?? '')),
+            await this.mutations.publishAnnouncement(
+              ctx,
+              String(args.announcementId ?? ''),
+              Boolean(args.sendSms),
+            ),
           );
         case 'send_reminders':
           return this.staged(await this.mutations.prepareReminders(ctx, String(args.body ?? '')));
@@ -1634,10 +1638,17 @@ export const AGENT_TOOL_SPECS: LlmToolSpec[] = [
   {
     name: 'publish_announcement',
     description:
-      'Publish a drafted announcement to the public event page — an external side effect. Confirm with the organizer first.',
+      'Publish a drafted announcement to the public event page, and optionally broadcast via SMS to all event contributors with a registered phone number. Confirm with the organizer first.',
     parameters: {
       type: 'object',
-      properties: { announcementId: { type: 'string' } },
+      properties: {
+        announcementId: { type: 'string' },
+        sendSms: {
+          type: 'boolean',
+          description:
+            'Set to true if the organizer wants to also send an SMS broadcast to all event contributors with a phone number (default false unless requested).',
+        },
+      },
       required: ['announcementId'],
     },
   },

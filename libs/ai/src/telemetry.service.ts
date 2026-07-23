@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '@akabbo/prisma';
+import { redactPii } from './redaction-helper';
 
 export interface TelemetryInput {
   conversationId?: string;
@@ -27,12 +28,13 @@ export class TelemetryService {
           conversationId: input.conversationId || null,
           eventId: input.eventId || null,
           userId: input.userId || null,
-          userPrompt: input.userPrompt,
-          modelResponse: input.modelResponse || null,
-          toolCallsJson: input.toolCallsJson || null,
+          userPrompt: redactPii(input.userPrompt),
+          modelResponse: redactPii(input.modelResponse || ''),
+          toolCallsJson: redactPii(input.toolCallsJson || ''),
           stagedStatus: input.stagedStatus || 'NONE',
           userRole: input.userRole || null,
           latencyMs: input.latencyMs || null,
+          evaluated: false,
         },
       });
     } catch (err) {

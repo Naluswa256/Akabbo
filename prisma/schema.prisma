@@ -1188,11 +1188,13 @@ model AiInteractionTrace {
   stagedStatus   String?  @map("staged_status")
   userRole       String?  @map("user_role")
   latencyMs      Int?     @map("latency_ms")
+  evaluated      Boolean  @default(false)
   createdAt      DateTime @default(now()) @map("created_at")
 
   @@index([eventId])
   @@index([userId])
   @@index([conversationId])
+  @@index([evaluated])
   @@map("ai_interaction_trace")
 }
 
@@ -1215,10 +1217,12 @@ model AiLearnedExemplar {
   userPromptPattern String   @map("user_prompt_pattern")
   learnedGuidance   String   @map("learned_guidance")
   confidenceScore   Float    @default(1.0) @map("confidence_score")
-  status            String   @default("APPROVED")
+  occurrenceCount   Int      @default(1) @map("occurrence_count")
+  status            String   @default("PENDING_REVIEW")
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
 
   @@index([category])
+  @@index([status])
   @@map("ai_learned_exemplar")
 }

@@ -8,6 +8,7 @@ export * from './tool-executor.service';
 export * from './usage-meter.service';
 export * from './confirmation.service';
 export * from './capture.service';
+export * from './redaction-helper';
 export * from './telemetry.service';
 export * from './dynamic-context.service';
 export * from './self-learning.service';

@@ -5,6 +5,7 @@ import {
   DynamicContextService,
   SelfLearningService,
   TelemetryService,
+  redactPii,
 } from '@akabbo/ai';
 
 class ScriptedLlm {
@@ -31,11 +32,23 @@ describe('AI Self-Learning & Improving Layer (Integration)', () => {
   const mockPrisma = {
     aiInteractionTrace: {
       create: (args: any) => {
-        const item = { id: 't1', ...args.data };
+        const item = { id: `t${mockTraces.length + 1}`, ...args.data };
         mockTraces.push(item);
         return Promise.resolve(item);
       },
-      findMany: () => Promise.resolve(mockTraces),
+      findMany: (args?: any) => {
+        if (args?.where?.evaluated === false) {
+          return Promise.resolve(mockTraces.filter((t) => !t.evaluated));
+        }
+        return Promise.resolve(mockTraces);
+      },
+      updateMany: (args: any) => {
+        const ids = args.where.id.in;
+        mockTraces.forEach((t) => {
+          if (ids.includes(t.id)) t.evaluated = args.data.evaluated;
+        });
+        return Promise.resolve({ count: ids.length });
+      },
     },
     aiLearnedExemplar: {
       count: () => Promise.resolve(mockExemplars.length),
@@ -44,15 +57,29 @@ describe('AI Self-Learning & Improving Layer (Integration)', () => {
         return Promise.resolve({ count: args.data.length });
       },
       create: (args: any) => {
-        const item = { id: 'e1', ...args.data };
+        const item = { id: `e${mockExemplars.length + 1}`, ...args.data };
         mockExemplars.push(item);
         return Promise.resolve(item);
       },
-      findMany: () => Promise.resolve(mockExemplars),
+      findFirst: (args: any) => {
+        const found = mockExemplars.find((e) => e.category === args.where.category);
+        return Promise.resolve(found || null);
+      },
+      findMany: (args?: any) => {
+        if (args?.where?.status) {
+          return Promise.resolve(mockExemplars.filter((e) => e.status === args.where.status));
+        }
+        return Promise.resolve(mockExemplars);
+      },
+      update: (args: any) => {
+        const found = mockExemplars.find((e) => e.id === args.where.id);
+        if (found) Object.assign(found, args.data);
+        return Promise.resolve(found);
+      },
     },
     aiReflectionLog: {
       create: (args: any) => {
-        const item = { id: 'r1', ...args.data };
+        const item = { id: `r${mockLogs.length + 1}`, ...args.data };
         mockLogs.push(item);
         return Promise.resolve(item);
       },
@@ -81,9 +108,18 @@ describe('AI Self-Learning & Improving Layer (Integration)', () => {
     await moduleRef.close();
   });
 
-  it('records interaction traces via TelemetryService', async () => {
+  it('redacts PII from phone numbers and amounts', () => {
+    const raw = 'John +256742670421 paid 200k for Kwanjula';
+    const redacted = redactPii(raw);
+    expect(redacted).not.toContain('+256742670421');
+    expect(redacted).not.toContain('200k');
+    expect(redacted).toContain('[PHONE_REDACTED]');
+    expect(redacted).toContain('[AMOUNT_REDACTED]');
+  });
+
+  it('records interaction traces with PII redacted via TelemetryService', async () => {
     await telemetry.recordTrace({
-      userPrompt: 'Record 200k cash from Sarah for Kwanjula',
+      userPrompt: 'Record 200k cash from +256742670421 for Kwanjula',
       modelResponse: 'Recorded 200,000 UGX contribution.',
       stagedStatus: 'CONFIRMED',
       userRole: 'COORDINATOR',
@@ -92,19 +128,26 @@ describe('AI Self-Learning & Improving Layer (Integration)', () => {
 
     const traces = await telemetry.getRecentTraces(10);
     expect(traces.length).toBeGreaterThan(0);
-    expect(traces[0].userPrompt).toContain('Kwanjula');
+    expect(traces[0].userPrompt).not.toContain('+256742670421');
+    expect(traces[0].userPrompt).toContain('[PHONE_REDACTED]');
   });
 
-  it('retrieves dynamic learned context matching keywords', async () => {
+  it('retrieves dynamic learned context matching keywords strictly for APPROVED exemplars', async () => {
     await dynamicContext.seedInitialExemplars();
     const context = await dynamicContext.getRelevantContext('Kwanjula budget amakanzu');
     expect(context).toContain('LEARNED DOMAIN KNOWLEDGE');
-    expect(context).toContain('KWANJULA_BUDGET');
+    expect(context).toContain('KWANJULA_CULTURAL_GIFTS');
   });
 
-  it('runs evaluation cycle and logs reflection insights', async () => {
+  it('runs evaluation cycle on un-evaluated traces and tags new exemplars as PENDING_REVIEW', async () => {
+    await telemetry.recordTrace({
+      userPrompt: 'Wrong amount for uncle John',
+      modelResponse: 'Which amount did he pay?',
+      stagedStatus: 'REJECTED',
+    });
+
     const result = await selfLearning.runEvaluationCycle(10);
-    expect(result.evaluatedTurnsCount).toBeGreaterThanOrEqual(0);
+    expect(result.evaluatedTurnsCount).toBeGreaterThan(0);
     expect(result.insightsSummary).toBeDefined();
 
     const latestLog = await selfLearning.getLatestReflectionLog();

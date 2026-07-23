@@ -13,6 +13,7 @@ import { buildLoggerParams } from '@akabbo/logging';
 import { HeartbeatService } from './heartbeat.service';
 import { DrainSchedulerService } from './drain-scheduler.service';
 import { OutboxHandlersRegistrar } from './outbox-handlers.registrar';
+import { LearningSchedulerService } from './learning-scheduler.service';
 
 /**
  * Worker composition root. Same codebase and foundations as the API, a separate
@@ -41,6 +42,11 @@ import { OutboxHandlersRegistrar } from './outbox-handlers.registrar';
     DocumentsModule,
     CommsModule,
   ],
-  providers: [HeartbeatService, DrainSchedulerService, OutboxHandlersRegistrar],
+  providers: [
+    HeartbeatService,
+    DrainSchedulerService,
+    OutboxHandlersRegistrar,
+    LearningSchedulerService,
+  ],
 })
 export class WorkerModule {}

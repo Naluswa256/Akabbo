@@ -4,10 +4,11 @@ import { AppConfigService } from '@akabbo/config';
 import { PrismaService } from '@akabbo/prisma';
 import {
   EventReport,
-  GenerateReportInput,
   GroupContribution,
   GroupService,
   LedgerQueryService,
+  ReportFilters,
+  ReportResult,
   ReportService,
   TenantContext,
   moneyToString,
@@ -38,8 +39,14 @@ export class AiQueryService {
     private readonly reports: ReportService,
   ) {}
 
-  /** Execute query-backed dynamic report for large dataset exploration */
-  async queryEventReport(ctx: OperationContext, input: GenerateReportInput) {
+  /**
+   * Execute a stateless report query. Returns a `ReportResult` with:
+   * - `tier`: INLINE_CHAT | MEDIUM_PREVIEW | LARGE_REPORT
+   * - `reportRef`: stateless URL + label for the frontend chip button
+   * - `preview`: top-5 rows for inline chat summary
+   * - `ambiguousGroup?`: candidates when groupName matches 0 or 2+ groups
+   */
+  async queryEventReport(ctx: OperationContext, input: ReportFilters): Promise<ReportResult> {
     return this.reports.generateReport(ctx, input);
   }
 

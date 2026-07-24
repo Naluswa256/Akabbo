@@ -1,58 +1,61 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { OperationContext, PermissionService } from '@akabbo/access';
 import { PrismaService } from '@akabbo/prisma';
 import { moneyToString } from './money';
+import { outstanding } from './pledge-status';
 
 export type ReportType = 'CONTRIBUTORS' | 'PLEDGES' | 'OUTSTANDING' | 'BUDGET' | 'PAYMENTS';
-export type PresentationTier = 'INLINE_CHAT' | 'MEDIUM_PREVIEW' | 'LARGE_REPORT' | 'FILE_EXPORT';
+export type ContributorStatus = 'all' | 'unpaid' | 'partial' | 'complete' | 'outstanding';
+export type PresentationTier = 'INLINE_CHAT' | 'MEDIUM_PREVIEW' | 'LARGE_REPORT';
 
-export interface GenerateReportInput {
+export interface ReportFilters {
   reportType: ReportType;
+  /** Unified status vocabulary — same as AiQueryService.listContributors */
+  status?: ContributorStatus;
+  /** Raw group name string — resolved against ContributorGroup before querying */
   groupName?: string;
   minAmount?: number;
   maxAmount?: number;
-  statusFilter?: string;
   searchTerm?: string;
-  sortField?: string;
+  sortField?: 'amount' | 'name';
   sortDirection?: 'asc' | 'desc';
 }
 
-export interface ReportSummary {
-  totalRecords: number;
-  totalAmount: string;
-  currency: string;
-  metadata?: Record<string, unknown>;
-}
-
 export interface ReportPreviewRow {
-  id: string;
   name: string;
   group?: string;
   amount: string;
-  status?: string;
-  detail?: string;
+  outstanding?: string;
+  status: string;
 }
 
-export interface GeneratedReportResult {
-  reportId: string;
+export interface ReportRef {
   reportType: ReportType;
-  presentationTier: PresentationTier;
-  summary: ReportSummary;
+  /** Human-readable label for the chip button, e.g. "35 contributors — outstanding only" */
+  label: string;
+  /** Stateless URL with filters encoded as query params, e.g. /events/:id/report/contributors?status=outstanding */
+  filterUrl: string;
+  totalRecords: number;
+  totalAmount: string;
+  currency: 'UGX';
+}
+
+export interface ReportResult {
+  tier: PresentationTier;
+  reportRef: ReportRef;
+  /** Top-5 preview rows for inline summary in chat (always present regardless of tier) */
   preview: ReportPreviewRow[];
-  reportUrl: string;
-  note?: string;
+  /** Set when groupName matched 0 or 2+ groups — model should ask which group */
+  ambiguousGroup?: { term: string; candidates: { id: string; name: string }[] };
 }
 
-export interface PaginatedReportResult {
-  reportId: string;
-  reportType: ReportType;
-  summary: ReportSummary;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-  rows: ReportPreviewRow[];
-}
-
+/**
+ * Stateless report query engine. No rows are ever written to the database —
+ * filters are encoded in the URL that the frontend opens. This means:
+ *  - No staleness: totals and rows come from the same live query
+ *  - No expiry sweep needed
+ *  - No cross-tenant leak: eventId in the path always gates access
+ */
 @Injectable()
 export class ReportService {
   constructor(
@@ -60,92 +63,85 @@ export class ReportService {
     private readonly permissions: PermissionService,
   ) {}
 
-  /** Generate or reuse a query-backed report with automatic tier thresholding */
+  /**
+   * Resolves a group name string against the event's ContributorGroups.
+   * Returns the matching group id, or an ambiguity result for the model to surface.
+   */
+  private async resolveGroupName(
+    eventId: string,
+    groupName: string,
+  ): Promise<
+    | { ok: true; groupId: string; groupNameResolved: string }
+    | { ok: false; candidates: { id: string; name: string }[] }
+  > {
+    const matches = await this.prisma.contributorGroup.findMany({
+      where: {
+        eventId,
+        name: { contains: groupName, mode: 'insensitive' },
+      },
+      select: { id: true, name: true },
+    });
+
+    if (matches.length === 1) {
+      return { ok: true, groupId: matches[0].id, groupNameResolved: matches[0].name };
+    }
+    // 0 or 2+ matches → ambiguous
+    return { ok: false, candidates: matches };
+  }
+
+  /**
+   * Primary AI reporting entry point. Runs a live Prisma query, applies tiering,
+   * and returns a stateless `ReportRef` with filters baked into the URL.
+   */
   async generateReport(
     ctx: OperationContext,
-    input: GenerateReportInput,
-  ): Promise<GeneratedReportResult> {
+    input: ReportFilters,
+  ): Promise<ReportResult> {
     this.permissions.assert(ctx.event.role, 'event:read');
     const eventId = ctx.event.eventId;
 
+    // ── Group name resolution ────────────────────────────────────────────────
+    let resolvedGroupId: string | undefined;
+    let resolvedGroupName: string | undefined;
+    let ambiguousGroup: ReportResult['ambiguousGroup'];
+
+    if (input.groupName) {
+      const resolution = await this.resolveGroupName(eventId, input.groupName);
+      if (!resolution.ok) {
+        ambiguousGroup = { term: input.groupName, candidates: resolution.candidates };
+        // Still proceed but without group filter so model can surface the ambiguity
+      } else {
+        resolvedGroupId = resolution.groupId;
+        resolvedGroupName = resolution.groupNameResolved;
+      }
+    }
+
+    // ── Query by report type ──────────────────────────────────────────────────
     let totalRecords = 0;
     let totalAmountBigInt = 0n;
-    let preview: ReportPreviewRow[] = [];
+    const preview: ReportPreviewRow[] = [];
 
-    // Query database depending on reportType
-    if (input.reportType === 'CONTRIBUTORS' || input.reportType === 'OUTSTANDING') {
-      const whereClause: any = { eventId };
+    if (
+      input.reportType === 'CONTRIBUTORS' ||
+      input.reportType === 'OUTSTANDING' ||
+      input.reportType === 'PLEDGES'
+    ) {
+      const rows = await this.queryContributors(eventId, input, resolvedGroupId);
 
-      if (input.groupName) {
-        whereClause.groups = {
-          some: { group: { name: { contains: input.groupName, mode: 'insensitive' } } },
-        };
+      totalRecords = rows.length;
+      totalAmountBigInt = rows.reduce((acc, r) => acc + r._received, 0n);
+
+      const top5 = rows.slice(0, 5);
+      for (const r of top5) {
+        const owed = outstanding(r._committed, r._received);
+        preview.push({
+          name: r.displayName,
+          group: r.groupName,
+          amount: moneyToString(r._received),
+          outstanding: owed > 0n ? moneyToString(owed) : undefined,
+          status: r._committed === 0n ? 'no_pledge' : r._received >= r._committed ? 'complete' : r._received > 0n ? 'partial' : 'unpaid',
+        });
       }
-
-      if (input.searchTerm) {
-        whereClause.displayName = { contains: input.searchTerm, mode: 'insensitive' };
-      }
-
-      const people = await this.prisma.person.findMany({
-        where: whereClause,
-        select: {
-          id: true,
-          displayName: true,
-          groups: { select: { group: { select: { name: true } } } },
-          pledges: {
-            select: {
-              committedValue: true,
-              fulfillments: { select: { value: true } },
-            },
-          },
-        },
-      });
-
-      const rows: ReportPreviewRow[] = [];
-      for (const p of people) {
-        let pledgedSum = 0n;
-        let receivedSum = 0n;
-
-        for (const pl of p.pledges) {
-          pledgedSum += pl.committedValue;
-          for (const f of pl.fulfillments) {
-            receivedSum += f.value;
-          }
-        }
-
-        const groupName = p.groups.map((g) => g.group.name).join(', ') || 'General';
-
-        let include = true;
-        if (input.minAmount && Number(receivedSum) < input.minAmount) include = false;
-        if (input.maxAmount && Number(receivedSum) > input.maxAmount) include = false;
-
-        if (input.reportType === 'OUTSTANDING') {
-          const outstandingValue = pledgedSum > receivedSum ? pledgedSum - receivedSum : 0n;
-          if (outstandingValue <= 0n) include = false;
-        }
-
-        if (include) {
-          totalRecords += 1;
-          totalAmountBigInt += receivedSum;
-
-          rows.push({
-            id: p.id,
-            name: p.displayName,
-            group: groupName,
-            amount: moneyToString(receivedSum),
-            status: pledgedSum > receivedSum ? 'PARTIAL' : 'PAID',
-            detail: pledgedSum > 0n ? `Pledged: ${moneyToString(pledgedSum)}` : undefined,
-          });
-        }
-      }
-
-      // Sort rows descending by amount
-      rows.sort((a, b) => {
-        const valA = parseFloat(a.amount.replace(/[^0-9.]/g, '')) || 0;
-        const valB = parseFloat(b.amount.replace(/[^0-9.]/g, '')) || 0;
-        return valB - valA;
-      });
-      preview = rows.slice(0, 5);
     } else if (input.reportType === 'BUDGET') {
       const items = await this.prisma.budgetItem.findMany({
         where: { eventId },
@@ -160,22 +156,21 @@ export class ReportService {
       totalRecords = items.length;
       totalAmountBigInt = items.reduce((acc: bigint, i) => acc + i.targetValue, 0n);
 
-      preview = items.slice(0, 5).map((i) => {
+      for (const i of items.slice(0, 5)) {
         const allocated = i.allocations.reduce((acc: bigint, a) => acc + a.value, 0n);
-        const isCovered = allocated >= i.targetValue && i.targetValue > 0n;
-        return {
-          id: i.id,
+        preview.push({
           name: i.name,
           amount: moneyToString(i.targetValue),
-          status: isCovered ? 'PAID' : 'UNPAID',
-          detail: `Allocated: ${moneyToString(allocated)}`,
-        };
-      });
+          status: allocated >= i.targetValue && i.targetValue > 0n ? 'complete' : 'partial',
+          outstanding: allocated < i.targetValue ? moneyToString(i.targetValue - allocated) : undefined,
+        });
+      }
     } else {
-      // Default payments/fulfillments
+      // PAYMENTS — recent fulfillments
       const fulfillments = await this.prisma.fulfillment.findMany({
         where: { eventId },
-        take: 100,
+        orderBy: { occurredAt: 'desc' },
+        take: 500,
         select: {
           id: true,
           value: true,
@@ -183,107 +178,210 @@ export class ReportService {
         },
       });
       totalRecords = fulfillments.length;
-      totalAmountBigInt = fulfillments.reduce((acc, f) => acc + f.value, 0n);
-      preview = fulfillments.slice(0, 5).map((f) => ({
-        id: f.id,
-        name: f.pledge.person.displayName,
-        amount: moneyToString(f.value),
-        status: 'CONFIRMED',
-      }));
+      totalAmountBigInt = fulfillments.reduce((acc: bigint, f) => acc + f.value, 0n);
+      for (const f of fulfillments.slice(0, 5)) {
+        preview.push({
+          name: f.pledge.person.displayName,
+          amount: moneyToString(f.value),
+          status: 'complete',
+        });
+      }
     }
 
-    // Presentation Tier Selection (Rules §2)
-    let presentationTier: PresentationTier = 'INLINE_CHAT';
-    if (totalRecords > 30) {
-      presentationTier = 'LARGE_REPORT';
-    } else if (totalRecords > 5) {
-      presentationTier = 'MEDIUM_PREVIEW';
-    }
+    // ── Tier selection ────────────────────────────────────────────────────────
+    let tier: PresentationTier = 'INLINE_CHAT';
+    if (totalRecords > 30) tier = 'LARGE_REPORT';
+    else if (totalRecords > 5) tier = 'MEDIUM_PREVIEW';
 
-    // Save report state idempotently
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
-    const reportState = await this.prisma.aiReportState.create({
-      data: {
-        eventId,
-        userId: ctx.actor.userId,
-        reportType: input.reportType,
-        filtersJson: JSON.stringify(input),
-        sortJson: input.sortField ? JSON.stringify({ field: input.sortField, dir: input.sortDirection }) : null,
-        totalRecords,
-        totalAmount: totalAmountBigInt,
-        expiresAt,
-      },
-    });
+    // ── Build stateless filter URL (no DB write) ───────────────────────────────
+    const params = new URLSearchParams();
+    if (input.status && input.status !== 'all') params.set('status', input.status);
+    if (resolvedGroupId) params.set('groupId', resolvedGroupId);
+    if (input.minAmount) params.set('minAmount', String(input.minAmount));
+    if (input.maxAmount) params.set('maxAmount', String(input.maxAmount));
+    if (input.searchTerm) params.set('search', input.searchTerm);
+    if (input.sortField) params.set('sort', input.sortField);
+    if (input.sortDirection) params.set('dir', input.sortDirection);
 
-    const reportUrl = `/events/${eventId}/reports/${reportState.id}`;
+    const pathSegment = reportTypeToPath(input.reportType);
+    const qs = params.toString();
+    const filterUrl = `/events/${eventId}/report/${pathSegment}${qs ? `?${qs}` : ''}`;
 
-    return {
-      reportId: reportState.id,
+    // ── Build human label ────────────────────────────────────────────────────
+    const statusLabel = input.status && input.status !== 'all' ? ` — ${input.status} only` : '';
+    const groupLabel = resolvedGroupName ? ` (${resolvedGroupName})` : '';
+    const label = `${totalRecords} ${reportTypeLabel(input.reportType)}${groupLabel}${statusLabel}`;
+
+    const reportRef: ReportRef = {
       reportType: input.reportType,
-      presentationTier,
-      summary: {
-        totalRecords,
-        totalAmount: moneyToString(totalAmountBigInt),
-        currency: 'UGX',
-      },
-      preview,
-      reportUrl,
-      note:
-        totalRecords > 5
-          ? `Prepared dynamic report with ${totalRecords} matching records. Direct link: ${reportUrl}`
-          : undefined,
+      label,
+      filterUrl,
+      totalRecords,
+      totalAmount: moneyToString(totalAmountBigInt),
+      currency: 'UGX',
     };
+
+    return { tier, reportRef, preview, ambiguousGroup };
   }
 
-  /** Get paginated report data for table rendering */
-  async getReportData(
+  /**
+   * Live paginated query powering the report viewer endpoint.
+   * Always queries fresh data — no snapshots.
+   */
+  async getPaginatedContributors(
     ctx: OperationContext,
-    reportId: string,
-    page = 1,
-    pageSize = 25,
+    filters: ReportFilters,
+    page: number,
+    pageSize: number,
     search?: string,
-  ): Promise<PaginatedReportResult> {
+  ) {
     this.permissions.assert(ctx.event.role, 'event:read');
-    const state = await this.prisma.aiReportState.findUnique({
-      where: { id: reportId },
-    });
+    const eventId = ctx.event.eventId;
 
-    if (!state || state.eventId !== ctx.event.eventId) {
-      throw new NotFoundException('Report not found or expired');
+    let resolvedGroupId: string | undefined;
+    if (filters.groupName) {
+      const r = await this.resolveGroupName(eventId, filters.groupName);
+      if (r.ok) resolvedGroupId = r.groupId;
     }
 
-    const filters: GenerateReportInput = JSON.parse(state.filtersJson);
-    if (search) filters.searchTerm = search;
-
-    // Execute generated report query
-    const report = await this.generateReport(ctx, filters);
-    const totalPages = Math.ceil(report.summary.totalRecords / pageSize) || 1;
-    const startIndex = (page - 1) * pageSize;
-    const paginatedRows = report.preview.slice(startIndex, startIndex + pageSize);
+    const effectiveFilters = search ? { ...filters, searchTerm: search } : filters;
+    const all = await this.queryContributors(eventId, effectiveFilters, resolvedGroupId);
+    const totalRecords = all.length;
+    const totalAmountBigInt = all.reduce((acc: bigint, r) => acc + r._received, 0n);
+    const totalPages = Math.max(1, Math.ceil(totalRecords / pageSize));
+    const start = (page - 1) * pageSize;
+    const rows = all.slice(start, start + pageSize).map((r) => {
+      const owed = outstanding(r._committed, r._received);
+      return {
+        name: r.displayName,
+        group: r.groupName,
+        amount: moneyToString(r._received),
+        outstanding: owed > 0n ? moneyToString(owed) : undefined,
+        status: r._committed === 0n ? 'no_pledge' : r._received >= r._committed ? 'complete' : r._received > 0n ? 'partial' : 'unpaid',
+      };
+    });
 
     return {
-      reportId,
-      reportType: state.reportType as ReportType,
-      summary: report.summary,
+      totalRecords,
+      totalAmount: moneyToString(totalAmountBigInt),
+      currency: 'UGX' as const,
       page,
       pageSize,
       totalPages,
-      rows: paginatedRows.length > 0 ? paginatedRows : report.preview,
+      rows,
     };
   }
 
-  /** Export report rows as CSV format string */
-  async exportReportCsv(ctx: OperationContext, reportId: string): Promise<string> {
-    const data = await this.getReportData(ctx, reportId, 1, 1000);
-    const lines = ['Name,Group,Amount,Status,Detail'];
-    for (const row of data.rows) {
-      const name = `"${(row.name || '').replace(/"/g, '""')}"`;
-      const group = `"${(row.group || '').replace(/"/g, '""')}"`;
-      const amount = `"${row.amount}"`;
-      const status = `"${row.status || ''}"`;
-      const detail = `"${(row.detail || '').replace(/"/g, '""')}"`;
-      lines.push(`${name},${group},${amount},${status},${detail}`);
+  /** Export as CSV — always live query, same filters as the paginated endpoint */
+  async exportCsv(ctx: OperationContext, filters: ReportFilters): Promise<string> {
+    const data = await this.getPaginatedContributors(ctx, filters, 1, 5000);
+    const lines = ['Name,Group,Amount,Outstanding,Status'];
+    for (const r of data.rows) {
+      const q = (s: string) => `"${(s || '').replace(/"/g, '""')}"`;
+      lines.push([q(r.name), q(r.group || ''), q(r.amount), q(r.outstanding || ''), q(r.status)].join(','));
     }
     return lines.join('\n');
+  }
+
+  // ── Private helpers ──────────────────────────────────────────────────────────
+
+  private async queryContributors(
+    eventId: string,
+    filters: ReportFilters,
+    resolvedGroupId?: string,
+  ): Promise<
+    { displayName: string; groupName?: string; _committed: bigint; _received: bigint }[]
+  > {
+    const people = await this.prisma.person.findMany({
+      where: {
+        eventId,
+        ...(filters.searchTerm
+          ? { displayName: { contains: filters.searchTerm, mode: 'insensitive' } }
+          : {}),
+        ...(resolvedGroupId
+          ? { groups: { some: { groupId: resolvedGroupId } } }
+          : {}),
+      },
+      select: {
+        id: true,
+        displayName: true,
+        groups: {
+          select: { group: { select: { name: true } } },
+          take: 1,
+        },
+        pledges: {
+          where: { status: { not: 'CANCELLED' } },
+          select: {
+            committedValue: true,
+            fulfillments: { select: { value: true } },
+          },
+        },
+      },
+    });
+
+    const rows = people.map((p) => {
+      let committed = 0n;
+      let received = 0n;
+      for (const pl of p.pledges) {
+        committed += pl.committedValue;
+        for (const f of pl.fulfillments) received += f.value;
+      }
+      return {
+        displayName: p.displayName,
+        groupName: p.groups[0]?.group.name,
+        _committed: committed,
+        _received: received,
+      };
+    });
+
+    // Apply status filter (unified vocabulary: all | unpaid | partial | complete | outstanding)
+    const status = filters.status ?? 'all';
+    const filtered = rows.filter((r) => {
+      switch (status) {
+        case 'unpaid':     return r._committed > 0n && r._received === 0n;
+        case 'partial':    return r._received > 0n && r._received < r._committed;
+        case 'complete':   return r._committed > 0n && r._received >= r._committed;
+        case 'outstanding': return outstanding(r._committed, r._received) > 0n;
+        default:           return r._committed > 0n || r._received > 0n;
+      }
+    });
+
+    // Apply amount filters
+    const withAmounts = filtered.filter((r) => {
+      if (filters.minAmount && Number(r._received) < filters.minAmount) return false;
+      if (filters.maxAmount && Number(r._received) > filters.maxAmount) return false;
+      return true;
+    });
+
+    // Sort
+    const sortDir = filters.sortDirection === 'asc' ? 1 : -1;
+    if (filters.sortField === 'name') {
+      withAmounts.sort((a, b) => sortDir * a.displayName.localeCompare(b.displayName));
+    } else {
+      // Default: sort by received descending
+      withAmounts.sort((a, b) => (a._received < b._received ? 1 : a._received > b._received ? -1 : 0) * sortDir);
+    }
+
+    return withAmounts;
+  }
+}
+
+function reportTypeToPath(type: ReportType): string {
+  switch (type) {
+    case 'CONTRIBUTORS': return 'contributors';
+    case 'OUTSTANDING':  return 'contributors';
+    case 'PLEDGES':      return 'contributors';
+    case 'BUDGET':       return 'budget';
+    case 'PAYMENTS':     return 'payments';
+  }
+}
+
+function reportTypeLabel(type: ReportType): string {
+  switch (type) {
+    case 'CONTRIBUTORS': return 'contributors';
+    case 'OUTSTANDING':  return 'contributors with outstanding balances';
+    case 'PLEDGES':      return 'pledge records';
+    case 'BUDGET':       return 'budget items';
+    case 'PAYMENTS':     return 'payments';
   }
 }

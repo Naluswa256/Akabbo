@@ -9,6 +9,7 @@ import {
   LlmToolResult,
   LlmToolSpec,
 } from '@akabbo/providers';
+import { ReportRef } from '@akabbo/ledger';
 import { CaptureService, CaptureResult } from '../capture.service';
 import { UsageMeter } from '../usage-meter.service';
 import { costMicroUsd } from '../pricing';
@@ -25,10 +26,14 @@ type Dispatch = (name: string, args: Record<string, unknown>) => Promise<ToolOut
 interface ToolOutcome {
   content: string;
   pendingId?: string;
+  /** Populated when a query_event_report tool call produces a report reference. */
+  reportRef?: ReportRef;
 }
 export interface ChatResult {
   reply: string;
   staged: string[];
+  /** Structured report references produced this turn — parallel to staged[]. */
+  reportRefs: ReportRef[];
   steps: number;
 }
 
@@ -154,6 +159,7 @@ export class AssistantService {
       { role: 'user', content: message },
     ];
     const staged: string[] = [];
+    const reportRefs: ReportRef[] = [];
     const allToolCalls: unknown[] = [];
 
     for (let step = 1; step <= MAX_STEPS; step += 1) {
@@ -183,7 +189,7 @@ export class AssistantService {
           latencyMs: Date.now() - startTime,
         });
 
-        return { reply, staged, steps: step };
+        return { reply, staged, reportRefs, steps: step };
       }
 
       // Echo the model's tool calls, then feed back each result.
@@ -191,8 +197,9 @@ export class AssistantService {
       const toolResults: LlmToolResult[] = [];
       for (const call of result.toolCalls) {
         allToolCalls.push({ name: call.name, args: call.arguments });
-        const { content, pendingId } = await dispatch(call.name, call.arguments);
+        const { content, pendingId, reportRef } = await dispatch(call.name, call.arguments);
         if (pendingId) staged.push(pendingId);
+        if (reportRef) reportRefs.push(reportRef);
         toolResults.push({ id: call.id, name: call.name, content });
       }
       messages.push({ role: 'tool', content: '', toolResults });
@@ -202,6 +209,7 @@ export class AssistantService {
     return {
       reply: "I wasn't able to finish that — could you rephrase or narrow it down?",
       staged,
+      reportRefs,
       steps: MAX_STEPS,
     };
   }
@@ -283,7 +291,7 @@ export class AssistantService {
     ctx: OperationContext,
     name: string,
     args: Record<string, unknown>,
-  ): Promise<{ content: string; pendingId?: string }> {
+  ): Promise<ToolOutcome> {
     try {
       switch (name) {
         // ── READ tools (immediate; grounded SQL) ──────────────────────────────
@@ -291,30 +299,33 @@ export class AssistantService {
           return json(await this.query.overview(ctx));
         case 'find_contributor':
           return json(await this.query.findContributor(ctx, String(args.name ?? '')));
-        case 'list_contributors':
-          return json(
-            await this.query.listContributors(ctx, {
-              status: args.status as 'all' | 'unpaid' | 'partial' | 'complete' | 'outstanding',
-              limit: typeof args.limit === 'number' ? args.limit : undefined,
-            }),
-          );
         case 'get_collected_in_period':
           return json(await this.query.collectedInPeriod(ctx, String(args.from), String(args.to)));
         case 'get_budget':
           return json(await this.query.budgetBreakdown(ctx));
         case 'get_group_contributions':
           return json({ groups: await this.query.groupContributions(ctx) });
-        case 'query_event_report':
-          return json(
-            await this.query.queryEventReport(ctx, {
-              reportType: (args.reportType as any) || 'CONTRIBUTORS',
-              groupName: args.groupName ? String(args.groupName) : undefined,
-              minAmount: typeof args.minAmount === 'number' ? args.minAmount : undefined,
-              maxAmount: typeof args.maxAmount === 'number' ? args.maxAmount : undefined,
-              statusFilter: args.statusFilter ? String(args.statusFilter) : undefined,
-              searchTerm: args.searchTerm ? String(args.searchTerm) : undefined,
-            }),
-          );
+        case 'query_event_report': {
+          const reportResult = await this.query.queryEventReport(ctx, {
+            reportType: (args.reportType as any) || 'CONTRIBUTORS',
+            status: args.status as 'all' | 'unpaid' | 'partial' | 'complete' | 'outstanding' | undefined,
+            groupName: args.groupName ? String(args.groupName) : undefined,
+            minAmount: typeof args.minAmount === 'number' ? args.minAmount : undefined,
+            maxAmount: typeof args.maxAmount === 'number' ? args.maxAmount : undefined,
+            searchTerm: args.searchTerm ? String(args.searchTerm) : undefined,
+          });
+          // Extract reportRef for the structured payload — model receives a lean summary
+          const { reportRef, preview, tier, ambiguousGroup } = reportResult;
+          const toolContent = {
+            tier,
+            totalRecords: reportRef.totalRecords,
+            totalAmount: reportRef.totalAmount,
+            preview,
+            filterUrl: reportRef.filterUrl,
+            ...(ambiguousGroup ? { ambiguousGroup } : {}),
+          };
+          return { content: JSON.stringify(toolContent), reportRef };
+        }
         case 'get_public_link':
           return json(await this.query.getPublicLink(ctx));
 
@@ -1516,18 +1527,7 @@ export const AGENT_TOOL_SPECS: LlmToolSpec[] = [
       required: ['name'],
     },
   },
-  {
-    name: 'list_contributors',
-    description:
-      'List contributors filtered by payment status. status: all | unpaid (pledged, paid nothing) | partial | complete | outstanding (still owe). Use for "who hasn\'t paid".',
-    parameters: {
-      type: 'object',
-      properties: {
-        status: { type: 'string', enum: ['all', 'unpaid', 'partial', 'complete', 'outstanding'] },
-        limit: { type: 'number' },
-      },
-    },
-  },
+
   {
     name: 'get_collected_in_period',
     description:
@@ -1577,6 +1577,42 @@ export const AGENT_TOOL_SPECS: LlmToolSpec[] = [
     description:
       'The event\'s public/shareable link — use for "give me the public link", "share the event". Returns the ready-to-share URL (or the path for the app to complete). Tells you if the public page is turned off.',
     parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'query_event_report',
+    description:
+      'List or count contributors, pledges, or payments — USE THIS (not any other tool) for any list question. ' +
+      'Tool selection rules: ' +
+      '(1) Use find_contributor for a SPECIFIC NAMED person. ' +
+      '(2) Use get_event_overview for AGGREGATE TOTALS ONLY. ' +
+      '(3) Use query_event_report for EVERYTHING ELSE — "who hasn\'t paid", "show me the list", "outstanding contributors", "bride side contributors", etc. ' +
+      'Returns: tier (INLINE_CHAT / MEDIUM_PREVIEW / LARGE_REPORT), totalRecords, totalAmount, top-5 preview rows, and a filterUrl for the frontend. ' +
+      'If ambiguousGroup is returned, ask the user which group they mean before proceeding. ' +
+      'NEVER call list_contributors — it is retired.',
+    parameters: {
+      type: 'object',
+      properties: {
+        reportType: {
+          type: 'string',
+          enum: ['CONTRIBUTORS', 'OUTSTANDING', 'PLEDGES', 'BUDGET', 'PAYMENTS'],
+          description: 'CONTRIBUTORS for general contributor list; OUTSTANDING to filter to those with balances; BUDGET for budget items; PAYMENTS for recent payments.',
+        },
+        status: {
+          type: 'string',
+          enum: ['all', 'unpaid', 'partial', 'complete', 'outstanding'],
+          description: 'all=everyone; unpaid=pledged but paid nothing; partial=paid some; complete=fully paid; outstanding=still owe something.',
+        },
+        groupName: {
+          type: 'string',
+          description: 'Filter to a contributor group by name (e.g. "bride side"). Pass the user\'s words — the tool will resolve and flag ambiguity.',
+        },
+        minAmount: { type: 'number', description: 'Minimum received amount in UGX minor units.' },
+        maxAmount: { type: 'number', description: 'Maximum received amount in UGX minor units.' },
+        searchTerm: { type: 'string', description: 'Name search — partial match, case-insensitive.' },
+        sortField: { type: 'string', enum: ['amount', 'name'] },
+        sortDirection: { type: 'string', enum: ['asc', 'desc'] },
+      },
+    },
   },
   {
     name: 'record_pledge',

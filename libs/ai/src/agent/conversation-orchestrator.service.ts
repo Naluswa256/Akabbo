@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ConversationMessageRole } from '@prisma/client';
 import { Actor } from '@akabbo/access';
+import { ReportRef } from '@akabbo/ledger';
 import { EventService, MembershipService } from '@akabbo/ledger';
 import { AssistantService } from './assistant.service';
 import { ConversationService } from './conversation.service';
@@ -12,6 +13,8 @@ export interface ConverseResult {
   reply: string;
   /** Pending-confirmation ids the turn staged (writes awaiting the human). */
   staged: string[];
+  /** Structured report references produced this turn — frontend renders chips from these. */
+  reportRefs: ReportRef[];
 }
 
 /**
@@ -60,6 +63,7 @@ export class ConversationOrchestrator {
       activeEventId: session.currentActiveEventId,
       reply: result.reply,
       staged: result.staged,
+      reportRefs: result.reportRefs,
     };
   }
 }

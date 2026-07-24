@@ -13,6 +13,7 @@ import { BudgetService } from './budget.service';
 import { AllocationService } from './allocation.service';
 import { GroupService } from './group.service';
 import { LedgerQueryService } from './ledger-query.service';
+import { ReportService } from './report.service';
 
 /**
  * The Ledger bounded context (the core, blueprint §2.1). One module, one
@@ -36,6 +37,7 @@ import { LedgerQueryService } from './ledger-query.service';
     AllocationService,
     GroupService,
     LedgerQueryService,
+    ReportService,
   ],
   exports: [
     // TenantContext is exported so the AI capture context (Phase 2) can scope
@@ -56,6 +58,7 @@ import { LedgerQueryService } from './ledger-query.service';
     AllocationService,
     GroupService,
     LedgerQueryService,
+    ReportService,
   ],
 })
 export class LedgerModule {}

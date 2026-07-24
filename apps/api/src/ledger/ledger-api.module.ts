@@ -4,6 +4,7 @@ import { AuthModule } from '../auth/auth.module';
 import { EventsController } from './events.controller';
 import { LedgerController } from './ledger.controller';
 import { InvitationController } from '../invitation/invitation.controller';
+import { ReportController } from '../report/report.controller';
 
 /**
  * HTTP surface for the Ledger context. Controllers only — all logic and the two
@@ -11,6 +12,6 @@ import { InvitationController } from '../invitation/invitation.controller';
  */
 @Module({
   imports: [LedgerModule, AuthModule],
-  controllers: [EventsController, LedgerController, InvitationController],
+  controllers: [EventsController, LedgerController, InvitationController, ReportController],
 })
 export class LedgerApiModule {}

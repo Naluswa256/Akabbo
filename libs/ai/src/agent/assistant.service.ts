@@ -304,6 +304,17 @@ export class AssistantService {
           return json(await this.query.budgetBreakdown(ctx));
         case 'get_group_contributions':
           return json({ groups: await this.query.groupContributions(ctx) });
+        case 'query_event_report':
+          return json(
+            await this.query.queryEventReport(ctx, {
+              reportType: (args.reportType as any) || 'CONTRIBUTORS',
+              groupName: args.groupName ? String(args.groupName) : undefined,
+              minAmount: typeof args.minAmount === 'number' ? args.minAmount : undefined,
+              maxAmount: typeof args.maxAmount === 'number' ? args.maxAmount : undefined,
+              statusFilter: args.statusFilter ? String(args.statusFilter) : undefined,
+              searchTerm: args.searchTerm ? String(args.searchTerm) : undefined,
+            }),
+          );
         case 'get_public_link':
           return json(await this.query.getPublicLink(ctx));
 

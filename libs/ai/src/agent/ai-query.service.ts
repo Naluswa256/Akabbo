@@ -4,9 +4,11 @@ import { AppConfigService } from '@akabbo/config';
 import { PrismaService } from '@akabbo/prisma';
 import {
   EventReport,
+  GenerateReportInput,
   GroupContribution,
   GroupService,
   LedgerQueryService,
+  ReportService,
   TenantContext,
   moneyToString,
   outstanding,
@@ -33,7 +35,13 @@ export class AiQueryService {
     private readonly groups: GroupService,
     private readonly prisma: PrismaService,
     private readonly config: AppConfigService,
+    private readonly reports: ReportService,
   ) {}
+
+  /** Execute query-backed dynamic report for large dataset exploration */
+  async queryEventReport(ctx: OperationContext, input: GenerateReportInput) {
+    return this.reports.generateReport(ctx, input);
+  }
 
   /** The whole "how are we doing?" picture (Part 1/2/9/15/17). */
   overview(ctx: OperationContext): Promise<EventReport> {

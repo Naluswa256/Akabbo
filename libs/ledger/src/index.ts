@@ -15,4 +15,5 @@ export * from './budget.service';
 export * from './allocation.service';
 export * from './group.service';
 export * from './ledger-query.service';
+export * from './report.service';
 export * from './ledger.module';

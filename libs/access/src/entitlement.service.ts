@@ -49,8 +49,12 @@ export interface ResolvedEntitlement {
   status: GrantStatus;
   /** null = unlimited/soft cap (Premium/Business). */
   maxContributors: number | null;
+  /** Live count of event contributors (person records). */
+  currentContributors: number;
   /** Team seats (active members + pending invites). null = unlimited. */
   maxSeats: number | null;
+  /** Live count of team seats currently in use. */
+  currentSeats: number;
   features: string[];
   /** Current SMS-credit balance for the scope (SUM of the append-only ledger). */
   smsBalance: number;
@@ -151,11 +155,15 @@ export class EntitlementService {
     const plan = grant ? await this.plan(grant.planCode) : await this.plan('FREE');
     const smsBalance = await this.smsBalance(scope);
     const aiBalance = await this.aiBalance(scope);
+    const currentContributors = scope.eventId ? await this.countContributors(scope.eventId) : 0;
+    const currentSeats = scope.eventId ? await this.countSeats(scope.eventId) : 0;
     return {
       planCode: plan.code,
       status: grant?.status ?? GrantStatus.TRIALING,
       maxContributors: plan.maxContributors,
+      currentContributors,
       maxSeats: seatsFromFeatures(plan.features),
+      currentSeats,
       features: plan.features,
       smsBalance,
       aiBalance,

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { ForbiddenException, Inject, Injectable, Logger } from '@nestjs/common';
-import { EntitlementService, OperationContext } from '@akabbo/access';
+import { OperationContext } from '@akabbo/access';
 import { BillingService } from '@akabbo/billing';
 import {
   LLM_PROVIDER,
@@ -66,7 +66,6 @@ export class AssistantService {
     private readonly capture: CaptureService,
     private readonly mutations: AiMutationService,
     private readonly meter: UsageMeter,
-    private readonly entitlements: EntitlementService,
     private readonly billing: BillingService,
     private readonly telemetry: TelemetryService,
     private readonly dynamicContext: DynamicContextService,
@@ -76,7 +75,9 @@ export class AssistantService {
     try {
       await this.dynamicContext.seedInitialExemplars();
     } catch (err) {
-      this.logger.warn(`AssistantService onModuleInit seed skipped: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn(
+        `AssistantService onModuleInit seed skipped: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
@@ -118,7 +119,28 @@ export class AssistantService {
       () => session.currentActiveEventId,
       message,
       history,
+      undefined,
+      session.actor.userId,
     );
+  }
+
+  /**
+   * Where the AI credit for this turn is spent. `{eventId}` when the
+   * conversation has an active event; otherwise the caller's ACCOUNT — this
+   * is what makes a brand-new conversation's very first message ("create a
+   * wedding for...") actually able to draw on the signup free-trial credits,
+   * which are granted at the account level, not per event (see
+   * BillingService.startAccountTrial). Without this fallback, `use_ai` would
+   * see an empty scope and always read a balance of 0 before any event exists.
+   */
+  private async resolveCreditScope(
+    eventId: string | null,
+    userId?: string,
+  ): Promise<{ eventId?: string; accountId?: string }> {
+    if (eventId) return { eventId };
+    if (!userId) return {};
+    const account = await this.billing.ensureBillingAccount(userId);
+    return { accountId: account.id };
   }
 
   /**
@@ -138,15 +160,50 @@ export class AssistantService {
   ): Promise<ChatResult> {
     const startTime = Date.now();
     const initialEventId = meterEventId();
-    const scope = initialEventId ? { eventId: initialEventId } : {};
-    const check = await this.entitlements.check(scope, 'use_ai');
-    if (!check.allowed) {
+    const scope = await this.resolveCreditScope(initialEventId, userId);
+    const reserveKey = `ai-turn:${randomUUID()}`;
+    const reserved = await this.billing.reserveAiCredit(scope, reserveKey);
+    if (!reserved.ok) {
       throw new ForbiddenException(
-        check.message ??
-          'Chat feature locked — 0 AI credits remaining. Purchase an AI Top-Up or upgrade your plan to continue using conversational features.',
+        'Chat feature locked — 0 AI credits remaining. Purchase an AI Top-Up or upgrade your plan to continue using conversational features.',
       );
     }
 
+    try {
+      return await this.runReservedLoop(
+        dispatch,
+        tools,
+        meterEventId,
+        message,
+        history,
+        userRole,
+        userId,
+        scope,
+        reserveKey,
+        initialEventId,
+        startTime,
+      );
+    } catch (err) {
+      // The turn never completed — give the credit back rather than charging
+      // for work that didn't happen.
+      await this.billing.refundAiCredit(scope, reserveKey).catch(() => {});
+      throw err;
+    }
+  }
+
+  private async runReservedLoop(
+    dispatch: Dispatch,
+    tools: LlmToolSpec[],
+    meterEventId: () => string | null,
+    message: string,
+    history: LlmMessage[],
+    userRole: string | undefined,
+    userId: string | undefined,
+    scope: { eventId?: string; accountId?: string },
+    reserveKey: string,
+    initialEventId: string | null,
+    startTime: number,
+  ): Promise<ChatResult> {
     const learnedPromptContext = await this.dynamicContext.getRelevantContext(message);
 
     const systemPromptContent = learnedPromptContext
@@ -171,12 +228,15 @@ export class AssistantService {
         });
       }
 
-      // No tool call → the model produced its final grounded answer.
+      // No tool call → the model produced its final grounded answer. The
+      // credit was already RESERVED before this loop started — commit it
+      // against that same reservation (not a freshly recomputed scope: the
+      // debit already happened at reserve time, this is just the audit
+      // marker that the turn actually completed).
       if (result.toolCalls.length === 0) {
         const finalEventId = meterEventId() ?? initialEventId;
-        const finalScope = finalEventId ? { eventId: finalEventId } : {};
-        await this.billing.deductAiCredit(finalScope, `turn:${randomUUID()}`);
-        
+        await this.billing.commitAiCredit(scope, reserveKey);
+
         const reply = result.text ?? '';
         void this.telemetry.recordTrace({
           eventId: finalEventId || undefined,
@@ -206,6 +266,9 @@ export class AssistantService {
     }
 
     this.logger.warn('Assistant hit MAX_STEPS');
+    // No grounded answer was produced — matches the pre-existing behaviour of
+    // never charging for a turn that didn't complete.
+    await this.billing.refundAiCredit(scope, reserveKey);
     return {
       reply: "I wasn't able to finish that — could you rephrase or narrow it down?",
       staged,
@@ -243,6 +306,15 @@ export class AssistantService {
             eventDate: date,
           });
           return json({ status: 'created', event: created });
+        }
+        case 'update_event': {
+          const target =
+            args.target === undefined || args.target === null
+              ? undefined
+              : (parseAmountToMinorUnits(String(args.target)) ?? undefined);
+          const date = parseDate(args.date);
+          const name = args.name === undefined ? undefined : String(args.name).trim() || undefined;
+          return json(await session.updateEvent({ name, targetAmount: target, eventDate: date }));
         }
         case 'switch_event':
           return json(await session.switchEvent(String(args.eventId ?? '')));
@@ -308,7 +380,8 @@ export class AssistantService {
         case 'query_event_report': {
           const reportResult = await this.query.queryEventReport(ctx, {
             reportType: (args.reportType as any) || 'CONTRIBUTORS',
-            status: args.status as 'all' | 'unpaid' | 'partial' | 'complete' | 'outstanding' | undefined,
+            status: args.status as
+              'all' | 'unpaid' | 'partial' | 'complete' | 'outstanding' | undefined,
             groupName: args.groupName ? String(args.groupName) : undefined,
             minAmount: typeof args.minAmount === 'number' ? args.minAmount : undefined,
             maxAmount: typeof args.maxAmount === 'number' ? args.maxAmount : undefined,
@@ -328,6 +401,13 @@ export class AssistantService {
         }
         case 'get_public_link':
           return json(await this.query.getPublicLink(ctx));
+        case 'get_sms_status':
+          return json(
+            await this.query.getSmsStatus(
+              ctx,
+              args.campaignId ? String(args.campaignId) : undefined,
+            ),
+          );
 
         // ── WRITE tools (resolve → gate → STAGE for confirmation) ──────────────
         case 'add_person':
@@ -599,7 +679,7 @@ const SYSTEM_PROMPT = [
   'ROLE PERMISSION ENFORCEMENT & EXPLANATIONS',
   '============================================================',
   '',
-  'You MUST strictly enforce and explain the active user\'s Event Role (`User Event Role: OWNER | CO_OWNER | COORDINATOR | FINANCE | VIEWER`):',
+  "You MUST strictly enforce and explain the active user's Event Role (`User Event Role: OWNER | CO_OWNER | COORDINATOR | FINANCE | VIEWER`):",
   '',
   '1. OWNER / CO_OWNER:',
   '   • Allowed: Everything (Add/edit pledges, payments, budget items, documents, SMS reminders, announcements, invite committee members, configure public settings).',
@@ -642,14 +722,14 @@ const SYSTEM_PROMPT = [
   '"Which event should I record this under — William & Sarah’s Wedding or the Family Fundraiser?"',
   '',
   'Never write data to the wrong event because of an assumed context.',
-'',
-'DISAMBIGUATING MULTIPLE EVENTS:',
-'- When asking the user which event they mean, ALWAYS refer to events by their human names and distinguishing details (such as Target Amount, Event Date, or Status).',
-'- NEVER display or ask the user to choose by raw internal database UUIDs (e.g. `ac4a0bdf-16ea-46a5-9f12-157a80a13f62`).',
-'- If multiple events have the exact same name, distinguish them in human terms, for example:',
-'  1. "Marvin & Ashley Introduction (Target: UGX 25,000,000, Status: Active)"',
-'  2. "Marvin & Ashley Introduction (Target: UGX 10,000,000, Status: Draft)"',
-'- When the user answers (e.g., "the first one" or "the 25M one"), match their choice to the event and use `switch_event` with that event\'s ID behind the scenes. The user should only see clean human names and details.',
+  '',
+  'DISAMBIGUATING MULTIPLE EVENTS:',
+  '- When asking the user which event they mean, ALWAYS refer to events by their human names and distinguishing details (such as Target Amount, Event Date, or Status).',
+  '- NEVER display or ask the user to choose by raw internal database UUIDs (e.g. `ac4a0bdf-16ea-46a5-9f12-157a80a13f62`).',
+  '- If multiple events have the exact same name, distinguish them in human terms, for example:',
+  '  1. "Marvin & Ashley Introduction (Target: UGX 25,000,000, Status: Active)"',
+  '  2. "Marvin & Ashley Introduction (Target: UGX 10,000,000, Status: Draft)"',
+  '- When the user answers (e.g., "the first one" or "the 25M one"), match their choice to the event and use `switch_event` with that event\'s ID behind the scenes. The user should only see clean human names and details.',
   '',
   '============================================================',
   '4. IDENTITY MODEL',
@@ -1131,6 +1211,9 @@ const SYSTEM_PROMPT = [
   '',
   'Never claim a message was delivered unless the communication tool provides delivery confirmation.',
   '',
+  'If the user asks whether an SMS reminder or announcement was sent, or who received it, ALWAYS call',
+  'get_sms_status first — never answer from what you remember queuing earlier in the conversation.',
+  '',
   'Distinguish:',
   '- Queued',
   '- Sent',
@@ -1595,20 +1678,26 @@ export const AGENT_TOOL_SPECS: LlmToolSpec[] = [
         reportType: {
           type: 'string',
           enum: ['CONTRIBUTORS', 'OUTSTANDING', 'PLEDGES', 'BUDGET', 'PAYMENTS'],
-          description: 'CONTRIBUTORS for general contributor list; OUTSTANDING to filter to those with balances; BUDGET for budget items; PAYMENTS for recent payments.',
+          description:
+            'CONTRIBUTORS for general contributor list; OUTSTANDING to filter to those with balances; BUDGET for budget items; PAYMENTS for recent payments.',
         },
         status: {
           type: 'string',
           enum: ['all', 'unpaid', 'partial', 'complete', 'outstanding'],
-          description: 'all=everyone; unpaid=pledged but paid nothing; partial=paid some; complete=fully paid; outstanding=still owe something.',
+          description:
+            'all=everyone; unpaid=pledged but paid nothing; partial=paid some; complete=fully paid; outstanding=still owe something.',
         },
         groupName: {
           type: 'string',
-          description: 'Filter to a contributor group by name (e.g. "bride side"). Pass the user\'s words — the tool will resolve and flag ambiguity.',
+          description:
+            'Filter to a contributor group by name (e.g. "bride side"). Pass the user\'s words — the tool will resolve and flag ambiguity.',
         },
         minAmount: { type: 'number', description: 'Minimum received amount in UGX minor units.' },
         maxAmount: { type: 'number', description: 'Maximum received amount in UGX minor units.' },
-        searchTerm: { type: 'string', description: 'Name search — partial match, case-insensitive.' },
+        searchTerm: {
+          type: 'string',
+          description: 'Name search — partial match, case-insensitive.',
+        },
         sortField: { type: 'string', enum: ['amount', 'name'] },
         sortDirection: { type: 'string', enum: ['asc', 'desc'] },
       },
@@ -1782,6 +1871,17 @@ export const AGENT_TOOL_SPECS: LlmToolSpec[] = [
       required: ['body'],
     },
   },
+  {
+    name: 'get_sms_status',
+    description:
+      'Check whether an SMS reminder or announcement actually sent — who received it, who failed, who is still pending, and every campaign that has run. ' +
+      'ALWAYS call this before answering "did it send", "has X received the SMS", "what happened to the reminder" — never guess or assume delivery from what you queued earlier in the conversation. ' +
+      'Omit campaignId to see all campaigns; pass it to check one specific blast.',
+    parameters: {
+      type: 'object',
+      properties: { campaignId: { type: 'string' } },
+    },
+  },
 ];
 
 /**
@@ -1793,7 +1893,8 @@ const SESSION_ONLY_TOOL_SPECS: LlmToolSpec[] = [
   {
     name: 'create_event',
     description:
-      'Create a new event and make it the active event. Gather only what you have; you can enrich (date, target) in later turns. Does not commit money — just creates the event.',
+      'Create a BRAND-NEW event and make it the active event. Gather only what you have; you can enrich (date, target) in later turns. Does not commit money — just creates the event. ' +
+      "Do NOT use this to change an existing event's target/date/name — that is update_event. Calling create_event on an existing event will hit the plan's active-event limit and fail.",
     parameters: {
       type: 'object',
       properties: {
@@ -1802,6 +1903,21 @@ const SESSION_ONLY_TOOL_SPECS: LlmToolSpec[] = [
         date: { type: 'string', description: 'Optional event date, ISO-8601 (YYYY-MM-DD)' },
       },
       required: ['name'],
+    },
+  },
+  {
+    name: 'update_event',
+    description:
+      'Change the CURRENT/ACTIVE event\'s own fields — use for "set our target to X", "change the date to Y", "rename the event". ' +
+      "This is the ONLY correct tool for changing an existing event's target amount — target is a field on the event itself, separate from budget items; do not add a budget line to represent the target. " +
+      'Requires an active event (switch_event first if needed). Never creates a new event.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'New event name' },
+        target: { type: 'string', description: 'New fundraising target, e.g. "3m"' },
+        date: { type: 'string', description: 'New event date, ISO-8601 (YYYY-MM-DD)' },
+      },
     },
   },
   {

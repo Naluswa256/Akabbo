@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '@akabbo/prisma';
 
 export interface UserView {
@@ -17,15 +18,32 @@ export interface UserView {
 export class UserService {
   constructor(private readonly prisma: PrismaService) {}
 
-  /** Find a user by phone or create one; used at OTP-verify time. */
-  async findOrCreateByPhone(phone: string): Promise<UserView> {
-    const user = await this.prisma.user.upsert({
-      where: { phone },
-      create: { phone },
-      update: {},
-      select: { id: true, phone: true, phoneVerified: true, displayName: true },
-    });
-    return user;
+  /**
+   * Find a user by phone or create one; used at OTP-verify time. Reports
+   * `isNew` explicitly (rather than inferring from timestamps) so the caller
+   * can trigger signup-only side effects — e.g. the free trial — exactly
+   * once, on genuine account creation, never on a returning user's login.
+   * Optimistic create + fall back on conflict: the unique constraint on
+   * `phone` is the arbiter for concurrent verifies of the same new number,
+   * not a separate check-then-create window.
+   */
+  async findOrCreateByPhone(phone: string): Promise<UserView & { isNew: boolean }> {
+    try {
+      const created = await this.prisma.user.create({
+        data: { phone },
+        select: { id: true, phone: true, phoneVerified: true, displayName: true },
+      });
+      return { ...created, isNew: true };
+    } catch (err) {
+      if (!(err instanceof Prisma.PrismaClientKnownRequestError) || err.code !== 'P2002') {
+        throw err;
+      }
+      const existing = await this.prisma.user.findUniqueOrThrow({
+        where: { phone },
+        select: { id: true, phone: true, phoneVerified: true, displayName: true },
+      });
+      return { ...existing, isNew: false };
+    }
   }
 
   async markPhoneVerified(userId: string): Promise<void> {

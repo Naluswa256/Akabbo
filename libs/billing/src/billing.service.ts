@@ -120,6 +120,39 @@ export class BillingService implements OnModuleInit {
   }
 
   /**
+   * Start the free trial ONCE PER ACCOUNT, at account creation — never per
+   * event. AI/SMS credits are a signup benefit, not something a plan that
+   * already allows multiple active events (Organizer Pro/Business) can farm
+   * by creating more of them. Idempotent: a second call for the same account
+   * is a safe no-op (both the grant lookup and the credit idempotency keys
+   * are keyed on `accountId`, not on a per-call id).
+   */
+  async startAccountTrial(accountId: string): Promise<void> {
+    const free = await this.plan('FREE');
+    const existingGrant = await this.prisma.entitlementGrant.findFirst({
+      where: { accountId, planId: free.id },
+      select: { id: true },
+    });
+    if (!existingGrant) {
+      await this.prisma.entitlementGrant.create({
+        data: { accountId, planId: free.id, status: GrantStatus.TRIALING },
+      });
+    }
+    await this.grantCredits(
+      { accountId },
+      FREE_TRIAL_SMS,
+      `trial-sms:account:${accountId}`,
+      'free trial SMS allowance (account)',
+    );
+    await this.grantAiCredits(
+      { accountId },
+      free.includedAiCredits || 50,
+      `trial-ai:account:${accountId}`,
+      'free trial AI allowance (account)',
+    );
+  }
+
+  /**
    * Begin buying a one-off EVENT pack: create a PENDING invoice and initiate a
    * Mobile Money collection. The grant is applied later, from the webhook.
    */
@@ -388,6 +421,59 @@ export class BillingService implements OnModuleInit {
 
   aiBalance(scope: EntitlementScope): Promise<number> {
     return this.entitlements.resolve(scope).then((e) => e.aiBalance);
+  }
+
+  /**
+   * Reserve AI credits BEFORE running the (possibly multi-step, multi-second)
+   * LLM turn — mirroring SMS's reserve/commit/refund exactly, and for the same
+   * reason: a plain check-then-deduct-at-the-end leaves a window, spanning the
+   * whole turn's duration, where concurrent requests against the same balance
+   * can all pass the check before any of them has actually spent anything.
+   * Reserving up front closes that window the same way SMS already does.
+   */
+  async reserveAiCredit(
+    scope: EntitlementScope,
+    idempotencyKey: string,
+    count = 1,
+  ): Promise<{ ok: boolean; balance: number }> {
+    const balance = await this.entitlements.resolve(scope).then((e) => e.aiBalance);
+    if (balance < count) return { ok: false, balance };
+    await this.appendAi(scope, AiLedgerKind.RESERVE, -count, idempotencyKey);
+    return { ok: true, balance: balance - count };
+  }
+
+  /** The turn completed — the reservation is spent for real (0-amount marker). */
+  async commitAiCredit(scope: EntitlementScope, reserveKey: string): Promise<void> {
+    await this.appendAi(scope, AiLedgerKind.COMMIT, 0, `commit:${reserveKey}`, reserveKey);
+  }
+
+  /** The turn never completed (error, or a no-charge outcome) — give it back. */
+  async refundAiCredit(scope: EntitlementScope, reserveKey: string, count = 1): Promise<void> {
+    await this.appendAi(scope, AiLedgerKind.REFUND, count, `refund:${reserveKey}`, reserveKey);
+  }
+
+  private async appendAi(
+    scope: EntitlementScope,
+    kind: AiLedgerKind,
+    amount: number,
+    idempotencyKey: string,
+    reference?: string,
+  ): Promise<void> {
+    try {
+      await this.prisma.aiCreditLedger.create({
+        data: {
+          eventId: scope.eventId ?? null,
+          accountId: scope.accountId ?? null,
+          kind,
+          amount,
+          idempotencyKey,
+          reference: reference ?? null,
+        },
+      });
+    } catch (err) {
+      if (isUniqueViolation(err)) return;
+      throw err;
+    }
   }
 
   // ── plan catalog helpers ──────────────────────────────────────────────────────

@@ -14,6 +14,7 @@ import {
   moneyToString,
   outstanding,
 } from '@akabbo/ledger';
+import { SmsService } from '@akabbo/comms';
 import { EntityResolver } from '../entity-resolver.service';
 
 /**
@@ -37,6 +38,7 @@ export class AiQueryService {
     private readonly prisma: PrismaService,
     private readonly config: AppConfigService,
     private readonly reports: ReportService,
+    private readonly sms: SmsService,
   ) {}
 
   /**
@@ -92,6 +94,28 @@ export class AiQueryService {
   /** Per-group contribution rollup ("how much has the bride's side given?", §9). */
   groupContributions(ctx: OperationContext): Promise<GroupContribution[]> {
     return this.groups.groupContributions(ctx);
+  }
+
+  /**
+   * SMS delivery ground truth — "did it send, and to who?" (§21/§34). The AI
+   * must call this before ever telling the user whether a reminder or
+   * announcement was delivered; it must never narrate a plausible-sounding
+   * status from memory. Pass `campaignId` to check one specific blast, or omit
+   * it to see every campaign plus the full delivery breakdown across all of
+   * them. Names only — phone numbers never surface here (§3.10).
+   */
+  async getSmsStatus(
+    ctx: OperationContext,
+    campaignId?: string,
+  ): Promise<{
+    campaigns: unknown[];
+    delivery: { sent: string[]; failed: string[]; pending: string[] };
+  }> {
+    const [campaigns, delivery] = await Promise.all([
+      this.sms.listCampaigns(ctx),
+      this.sms.delivery(ctx, campaignId),
+    ]);
+    return { campaigns, delivery };
   }
 
   /**

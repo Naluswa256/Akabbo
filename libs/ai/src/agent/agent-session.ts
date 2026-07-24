@@ -38,6 +38,12 @@ export interface AgentSession {
     targetAmount?: bigint;
     eventDate?: Date;
   }): Promise<CreatedEvent>;
+  /** Update the ACTIVE event's name/target/date (no active event → an error). */
+  updateEvent(input: {
+    name?: string;
+    targetAmount?: bigint;
+    eventDate?: Date;
+  }): Promise<{ ok: boolean; event?: CreatedEvent; error?: string }>;
   /** Switch the active event (must be one the user belongs to). */
   switchEvent(eventId: string): Promise<{ ok: boolean; name?: string; error?: string }>;
   /** The events this user can act on (for "which event?" disambiguation). */
@@ -94,6 +100,33 @@ export class ConversationSession implements AgentSession {
       targetAmount: summary.targetAmount,
       eventDate: summary.eventDate,
       slug: summary.slug,
+    };
+  }
+
+  /**
+   * Change the active event's own fields (target/date/name) — distinct from
+   * `createEvent`: this never creates a new event and never touches the
+   * active-event-cap check, so it's safe on an event that's already active.
+   */
+  async updateEvent(input: {
+    name?: string;
+    targetAmount?: bigint;
+    eventDate?: Date;
+  }): Promise<{ ok: boolean; event?: CreatedEvent; error?: string }> {
+    const ctx = await this.activeEventCtx();
+    if (!ctx) {
+      return { ok: false, error: 'No active event — switch to or create one first.' };
+    }
+    const summary = await this.events.updateEvent(ctx, input);
+    return {
+      ok: true,
+      event: {
+        id: summary.id,
+        name: summary.name,
+        targetAmount: summary.targetAmount,
+        eventDate: summary.eventDate,
+        slug: summary.slug,
+      },
     };
   }
 

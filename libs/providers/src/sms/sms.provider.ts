@@ -28,9 +28,12 @@ export interface SmsSendResult {
   status: SmsDeliveryStatus;
   /** Provider-reported segment count (drives credit commit). */
   segments: number;
+  /** Why it failed, if it did — surfaced from the provider so it's diagnosable later. */
+  error?: string;
 }
 
 export interface SmsProvider {
+  readonly name: string;
   send(request: SmsSendRequest): Promise<SmsSendResult>;
   /**
    * Send a batch of PERSONALISED messages in one call (a reminder blast). One

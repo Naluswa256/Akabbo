@@ -1055,9 +1055,16 @@ model SmsCreditLedger {
   @@map("sms_credit_ledger")
 }
 
+/// RESERVE/COMMIT/REFUND mirror SmsLedgerKind's pattern (metering doc §6/§7.4):
+/// reserve BEFORE the (possibly long-running) LLM turn runs, commit on success,
+/// refund on failure — never a bare deduct-after-the-fact, which would leave a
+/// window where concurrent requests can all pass the balance check before any
+/// of them has actually spent anything. DEDUCT is kept for existing rows only.
 enum AiLedgerKind {
   GRANT
   DEDUCT
+  RESERVE
+  COMMIT
   REFUND
 }
 

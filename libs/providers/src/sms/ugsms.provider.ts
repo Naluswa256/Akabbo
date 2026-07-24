@@ -53,15 +53,22 @@ export class UgSmsProvider implements SmsProvider {
 
     // Whole-request failure (auth, network, malformed) → every message failed.
     if (!res.ok || !body.data) {
-      this.logger.error(`UGSMS bulk failed: HTTP ${res.status} ${body.message ?? ''}`);
-      return requests.map(() => ({ providerMessageId: '', status: 'failed', segments: 1 }));
+      const reason = `HTTP ${res.status} ${body.message ?? ''}`.trim();
+      this.logger.error(`UGSMS bulk send failed for all ${requests.length} message(s): ${reason}`);
+      return requests.map(() => ({
+        providerMessageId: '',
+        status: 'failed' as const,
+        segments: 1,
+        error: reason,
+      }));
     }
 
-    // Map per-message results back by index (default: failed).
+    // Map per-message results back by index (default: failed, no reason given).
     const results: SmsSendResult[] = requests.map(() => ({
       providerMessageId: '',
       status: 'failed' as const,
       segments: 1,
+      error: 'not returned by provider',
     }));
     for (const ok of body.data.successful_messages ?? []) {
       results[ok.index] = {
@@ -71,8 +78,18 @@ export class UgSmsProvider implements SmsProvider {
       };
     }
     for (const bad of body.data.failed_messages ?? []) {
-      results[bad.index] = { providerMessageId: '', status: 'failed', segments: 1 };
+      results[bad.index] = {
+        providerMessageId: '',
+        status: 'failed',
+        segments: 1,
+        error: bad.error ?? 'rejected by provider',
+      };
     }
+    const sentCount = body.data.successful_messages?.length ?? 0;
+    const failedCount = body.data.failed_messages?.length ?? 0;
+    this.logger.log(
+      `UGSMS bulk send: ${sentCount} sent, ${failedCount} failed of ${requests.length} requested`,
+    );
     return results;
   }
 

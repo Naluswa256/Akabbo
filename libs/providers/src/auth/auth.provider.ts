@@ -38,6 +38,12 @@ export interface AuthSession {
   /** Long-lived signed refresh token used to request new access tokens. */
   refreshToken: string;
   expiresAt: Date;
+  /**
+   * True only when this call created the user account (never on a returning
+   * login or a token refresh). The API layer uses this to start the
+   * account's one-time free trial exactly once, at genuine signup.
+   */
+  isNewUser: boolean;
 }
 
 export interface RefreshTokenRequest {

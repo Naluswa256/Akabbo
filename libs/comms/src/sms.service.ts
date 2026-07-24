@@ -136,6 +136,19 @@ export class SmsService {
           idempotencyKey: `sms-campaign:${campaign.id}`,
           payload: { campaignId: campaign.id },
         });
+        this.logger.log(
+          `SMS ${kind} campaign ${campaign.id} queued for event ${eventId}: ${queued} recipient(s)` +
+            (recipients.length - queued > 0
+              ? `, ${recipients.length - queued} skipped (out of SMS credits)`
+              : ''),
+        );
+      } else {
+        // Never silently drop a send — this is exactly the "why didn't it go
+        // out" case: no one matched (no phone on file, or no one outstanding).
+        this.logger.warn(
+          `SMS ${kind} campaign ${campaign.id} for event ${eventId} has NO eligible recipients ` +
+            `(${recipients.length} candidate(s) found) — nothing was queued, no outbox row created.`,
+        );
       }
       return { campaignId: campaign.id, queued, skipped: recipients.length - queued };
     });
@@ -153,8 +166,14 @@ export class SmsService {
         select: { id: true, toPhone: true, body: true, reserveKey: true },
       }),
     );
-    if (pending.length === 0) return;
+    if (pending.length === 0) {
+      this.logger.debug(`Campaign ${campaignId}: no QUEUED messages to process (already handled).`);
+      return;
+    }
 
+    this.logger.log(
+      `Processing SMS campaign ${campaignId} for event ${eventId}: ${pending.length} message(s) via ${this.sms.name}`,
+    );
     const requests: SmsSendRequest[] = pending.map((m) => ({
       to: m.toPhone,
       body: m.body,
@@ -183,7 +202,9 @@ export class SmsService {
         } else {
           await tx.smsMessage.update({
             where: { id: m.id },
-            data: { status: SmsStatus.FAILED, error: 'provider rejected' },
+            // Store the REAL reason the provider gave, not a generic placeholder —
+            // this is the field the delivery/status views surface (never the raw phone).
+            data: { status: SmsStatus.FAILED, error: res?.error ?? 'provider rejected' },
           });
           // A failed SMS must never cost a credit (metering §6).
           await this.billing.refund({ eventId }, 1, m.reserveKey);
@@ -201,7 +222,9 @@ export class SmsService {
                 : SmsCampaignStatus.PARTIAL,
         },
       });
-      this.logger.log(`Campaign ${campaignId}: ${sent} sent, ${failed} failed`);
+      this.logger.log(
+        `Campaign ${campaignId} (event ${eventId}) processed: ${sent} sent, ${failed} failed of ${pending.length}`,
+      );
     });
   }
 

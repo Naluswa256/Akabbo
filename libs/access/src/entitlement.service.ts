@@ -184,19 +184,21 @@ export class EntitlementService {
     return members + pending;
   }
 
+  /**
+   * The best active grant visible to this scope — pooling the event's OWN
+   * grant (e.g. a purchased event pack) with its owning ACCOUNT's grant (e.g.
+   * a Business subscription, or the account-level free trial). Without this,
+   * a paying subscriber's account grant is invisible the moment a check is
+   * made with `{eventId}` (which is every real call site), and they'd
+   * silently fall back to FREE-tier limits on every event — paying for a
+   * plan that never actually applies. When both exist, the higher-priced
+   * plan wins (same tie-break already used across multiple account grants).
+   */
   private async activeGrant(
     scope: EntitlementScope,
   ): Promise<{ planCode: string; status: GrantStatus } | null> {
     const activeStates = [GrantStatus.TRIALING, GrantStatus.ACTIVE];
-    if (scope.eventId) {
-      const g = await this.prisma.entitlementGrant.findFirst({
-        where: { eventId: scope.eventId, status: { in: activeStates } },
-        select: { status: true, plan: { select: { code: true } } },
-      });
-      return g ? { planCode: g.plan.code, status: g.status } : null;
-    }
     if (scope.accountId) {
-      // The best active grant on the account (highest-priced plan wins).
       const g = await this.prisma.entitlementGrant.findFirst({
         where: { accountId: scope.accountId, status: { in: activeStates } },
         orderBy: { plan: { priceMinor: 'desc' } },
@@ -204,20 +206,67 @@ export class EntitlementService {
       });
       return g ? { planCode: g.plan.code, status: g.status } : null;
     }
-    return null;
+    if (!scope.eventId) return null;
+
+    const accountId = await this.owningAccountId(scope.eventId);
+    const candidates = await this.prisma.entitlementGrant.findMany({
+      where: {
+        status: { in: activeStates },
+        OR: [{ eventId: scope.eventId }, ...(accountId ? [{ accountId }] : [])],
+      },
+      orderBy: { plan: { priceMinor: 'desc' } },
+      select: { status: true, plan: { select: { code: true } } },
+      take: 1,
+    });
+    const g = candidates[0];
+    return g ? { planCode: g.plan.code, status: g.status } : null;
+  }
+
+  /**
+   * The event's owning account, if it has one — so a balance check on an
+   * event can also see credits granted at the ACCOUNT level (the free trial
+   * is granted ONCE per account at signup, not per event; see BillingService
+   * .startAccountTrial). Ledger DEBITS (reserve/deduct) stay event-scoped for
+   * a clean per-event audit trail — only the balance READ needs to pool both.
+   */
+  private async owningAccountId(eventId: string): Promise<string | null> {
+    const event = await this.prisma.event.findUnique({
+      where: { id: eventId },
+      select: { ownerUserId: true },
+    });
+    if (!event) return null;
+    const account = await this.prisma.billingAccount.findFirst({
+      where: { ownerUserId: event.ownerUserId },
+      select: { id: true },
+    });
+    return account?.id ?? null;
+  }
+
+  /** Ledger rows for either scope key, pooled — see {@link owningAccountId}. */
+  private async scopeWhere(
+    scope: EntitlementScope,
+  ): Promise<{ eventId?: string; accountId?: string }[]> {
+    if (scope.accountId) return [{ accountId: scope.accountId }];
+    if (!scope.eventId) return [];
+    const accountId = await this.owningAccountId(scope.eventId);
+    return accountId ? [{ eventId: scope.eventId }, { accountId }] : [{ eventId: scope.eventId }];
   }
 
   private async smsBalance(scope: EntitlementScope): Promise<number> {
+    const OR = await this.scopeWhere(scope);
+    if (OR.length === 0) return 0;
     const agg = await this.prisma.smsCreditLedger.aggregate({
-      where: scope.eventId ? { eventId: scope.eventId } : { accountId: scope.accountId },
+      where: { OR },
       _sum: { amount: true },
     });
     return agg._sum.amount ?? 0;
   }
 
   private async aiBalance(scope: EntitlementScope): Promise<number> {
+    const OR = await this.scopeWhere(scope);
+    if (OR.length === 0) return 0;
     const agg = await this.prisma.aiCreditLedger.aggregate({
-      where: scope.eventId ? { eventId: scope.eventId } : { accountId: scope.accountId },
+      where: { OR },
       _sum: { amount: true },
     });
     return agg._sum.amount ?? 0;

@@ -114,7 +114,13 @@ export class LocalAuthProvider implements AuthProvider {
     const user = await this.users.findOrCreateByPhone(challenge.phone);
     if (!user.phoneVerified) await this.users.markPhoneVerified(user.id);
 
-    return this.issueSession(user.id, true);
+    // `isNewUser` tells the API layer (AuthController) to start the account's
+    // one-time free trial. That side effect deliberately does NOT live here:
+    // IdentityModule is @Global() and pulled into nearly every module in the
+    // app, so giving it a hard dependency on the whole billing/payment-
+    // provider graph would force every unrelated consumer to satisfy that
+    // graph too. The controller layer is the right place for this fan-out.
+    return this.issueSession(user.id, true, user.isNew);
   }
 
   async refreshToken(request: RefreshTokenRequest): Promise<AuthSession> {
@@ -151,7 +157,7 @@ export class LocalAuthProvider implements AuthProvider {
     }
   }
 
-  private issueSession(userId: string, phoneVerified: boolean): AuthSession {
+  private issueSession(userId: string, phoneVerified: boolean, isNewUser = false): AuthSession {
     const ttl = this.config.get('JWT_TTL_SECONDS');
     const refreshTtl = this.config.get('JWT_REFRESH_TTL_SECONDS');
     const secret = this.config.get('JWT_SECRET');
@@ -167,6 +173,7 @@ export class LocalAuthProvider implements AuthProvider {
       accessToken,
       refreshToken,
       expiresAt: new Date(Date.now() + ttl * 1000),
+      isNewUser,
     };
   }
 }

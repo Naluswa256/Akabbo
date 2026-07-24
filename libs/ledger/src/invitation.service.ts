@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { EventRole, InvitationStatus, MembershipStatus } from '@prisma/client';
 import {
   Actor,
@@ -65,6 +65,25 @@ export class InvitationService {
   ): Promise<InvitationView> {
     this.permissions.assert(ctx.event.role, 'member:manage');
     assertEventWritable(ctx.event.status);
+
+    if (input.invitedPhone) {
+      const existingUser = await this.prisma.user.findUnique({
+        where: { phone: input.invitedPhone },
+        select: { id: true },
+      });
+      if (existingUser) {
+        const existingMembership = await this.prisma.eventMember.findUnique({
+          where: { eventId_userId: { eventId: ctx.event.eventId, userId: existingUser.id } },
+          select: { role: true, status: true },
+        });
+        if (existingMembership && existingMembership.status === MembershipStatus.ACTIVE) {
+          throw new BadRequestException(
+            `User with phone number ${input.invitedPhone} is already a member of this event with role ${existingMembership.role}.`,
+          );
+        }
+      }
+    }
+
     // Seat gate (metering §7): don't invite past the plan's team-seat allowance.
     const seat = await this.entitlements.check({ eventId: ctx.event.eventId }, 'add_member');
     if (!seat.allowed) {

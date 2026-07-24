@@ -79,10 +79,19 @@ export class BillingService implements OnModuleInit {
     return this.entitlements.resolve(scope);
   }
 
-  /** The payer for a user, get-or-created (idempotent). */
+  /**
+   * The payer for a user, get-or-created (idempotent). `orderBy: createdAt asc`
+   * matters here: `ownerUserId` has no unique constraint on `billing_account`,
+   * so if a user ever ends up with more than one row, this MUST resolve the
+   * same one EntitlementService.owningAccountId() would — otherwise a balance
+   * check keyed off this method (e.g. the AI's account-level credit fallback)
+   * can silently disagree with a balance check keyed off an event, even for
+   * the same user. Oldest wins consistently everywhere.
+   */
   async ensureBillingAccount(userId: string): Promise<{ id: string }> {
     const existing = await this.prisma.billingAccount.findFirst({
       where: { ownerUserId: userId },
+      orderBy: { createdAt: 'asc' },
       select: { id: true },
     });
     if (existing) return existing;

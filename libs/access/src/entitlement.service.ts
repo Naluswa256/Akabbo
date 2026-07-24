@@ -149,12 +149,23 @@ export class EntitlementService {
     return { allowed: true };
   }
 
-  /** The effective plan + balance for a scope. Falls back to FREE limits. */
+  /**
+   * The effective plan + balance for a scope. Falls back to FREE limits.
+   * `owningAccountId` is resolved ONCE here and threaded through — resolving
+   * it separately per lookup (as this used to) meant two `findFirst` calls
+   * with no explicit ordering could each pick a DIFFERENT account row if a
+   * user ever ends up with more than one (no unique constraint on
+   * ownerUserId today), making a single `resolve()` call internally
+   * inconsistent with itself, e.g. `activeGrant` reporting a paid plan while
+   * `aiBalance` reads a balance of 0 from a different, empty account.
+   */
   async resolve(scope: EntitlementScope): Promise<ResolvedEntitlement> {
-    const grant = await this.activeGrant(scope);
+    const accountId =
+      scope.accountId ?? (scope.eventId ? await this.owningAccountId(scope.eventId) : null);
+    const grant = await this.activeGrant(scope, accountId);
     const plan = grant ? await this.plan(grant.planCode) : await this.plan('FREE');
-    const smsBalance = await this.smsBalance(scope);
-    const aiBalance = await this.aiBalance(scope);
+    const smsBalance = await this.smsBalance(scope, accountId);
+    const aiBalance = await this.aiBalance(scope, accountId);
     const currentContributors = scope.eventId ? await this.countContributors(scope.eventId) : 0;
     const currentSeats = scope.eventId ? await this.countSeats(scope.eventId) : 0;
     return {
@@ -196,6 +207,7 @@ export class EntitlementService {
    */
   private async activeGrant(
     scope: EntitlementScope,
+    accountId: string | null,
   ): Promise<{ planCode: string; status: GrantStatus } | null> {
     const activeStates = [GrantStatus.TRIALING, GrantStatus.ACTIVE];
     if (scope.accountId) {
@@ -208,7 +220,6 @@ export class EntitlementService {
     }
     if (!scope.eventId) return null;
 
-    const accountId = await this.owningAccountId(scope.eventId);
     const candidates = await this.prisma.entitlementGrant.findMany({
       where: {
         status: { in: activeStates },
@@ -228,6 +239,12 @@ export class EntitlementService {
    * is granted ONCE per account at signup, not per event; see BillingService
    * .startAccountTrial). Ledger DEBITS (reserve/deduct) stay event-scoped for
    * a clean per-event audit trail — only the balance READ needs to pool both.
+   *
+   * `ownerUserId` has no unique constraint on `billing_account` today, so if a
+   * user ever ends up with more than one row, `orderBy: createdAt asc` makes
+   * every lookup in this service agree on the SAME one (the original,
+   * longest-lived account) instead of an unordered `LIMIT 1` that Postgres
+   * gives no guarantee will return the same row twice.
    */
   private async owningAccountId(eventId: string): Promise<string | null> {
     const event = await this.prisma.event.findUnique({
@@ -237,23 +254,24 @@ export class EntitlementService {
     if (!event) return null;
     const account = await this.prisma.billingAccount.findFirst({
       where: { ownerUserId: event.ownerUserId },
+      orderBy: { createdAt: 'asc' },
       select: { id: true },
     });
     return account?.id ?? null;
   }
 
   /** Ledger rows for either scope key, pooled — see {@link owningAccountId}. */
-  private async scopeWhere(
+  private scopeWhere(
     scope: EntitlementScope,
-  ): Promise<{ eventId?: string; accountId?: string }[]> {
+    accountId: string | null,
+  ): { eventId?: string; accountId?: string }[] {
     if (scope.accountId) return [{ accountId: scope.accountId }];
     if (!scope.eventId) return [];
-    const accountId = await this.owningAccountId(scope.eventId);
     return accountId ? [{ eventId: scope.eventId }, { accountId }] : [{ eventId: scope.eventId }];
   }
 
-  private async smsBalance(scope: EntitlementScope): Promise<number> {
-    const OR = await this.scopeWhere(scope);
+  private async smsBalance(scope: EntitlementScope, accountId: string | null): Promise<number> {
+    const OR = this.scopeWhere(scope, accountId);
     if (OR.length === 0) return 0;
     const agg = await this.prisma.smsCreditLedger.aggregate({
       where: { OR },
@@ -262,8 +280,8 @@ export class EntitlementService {
     return agg._sum.amount ?? 0;
   }
 
-  private async aiBalance(scope: EntitlementScope): Promise<number> {
-    const OR = await this.scopeWhere(scope);
+  private async aiBalance(scope: EntitlementScope, accountId: string | null): Promise<number> {
+    const OR = this.scopeWhere(scope, accountId);
     if (OR.length === 0) return 0;
     const agg = await this.prisma.aiCreditLedger.aggregate({
       where: { OR },

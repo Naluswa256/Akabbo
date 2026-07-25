@@ -49,11 +49,20 @@ export class SmsService {
     @Inject(SMS_PROVIDER) private readonly sms: SmsProvider,
   ) {}
 
-  /** Preview a reminder blast: who's outstanding, and can we afford them? */
-  async previewReminders(ctx: OperationContext): Promise<ReminderPreview> {
+  /**
+   * Preview a reminder blast: who's outstanding, and can we afford them?
+   * Pass `personIds` to preview a hand-picked selection instead of the
+   * default "everyone outstanding" set (manual/panel flow, not chat).
+   */
+  async previewReminders(
+    ctx: OperationContext,
+    personIds?: string[],
+  ): Promise<ReminderPreview> {
     this.permissions.assert(ctx.event.role, 'sms:read');
     const recipients = await this.tenant.runInEvent(ctx.event.eventId, (tx) =>
-      this.unpaidWithPhone(tx),
+      personIds && personIds.length > 0
+        ? this.specificWithPhone(tx, personIds)
+        : this.unpaidWithPhone(tx),
     );
     const smsBalance = await this.billing.balance({ eventId: ctx.event.eventId });
     return {
@@ -64,14 +73,34 @@ export class SmsService {
     };
   }
 
-  /** Send a reminder to every outstanding contributor with a phone. */
-  sendReminders(ctx: OperationContext, body: string): Promise<SendResult> {
-    return this.dispatch(ctx, SmsCampaignKind.REMINDER, body, (tx) => this.unpaidWithPhone(tx));
+  /**
+   * Send a reminder. Default: every outstanding contributor with a phone.
+   * Pass `personIds` (from the contributor report/panel, not chat) to target
+   * exactly those contributors instead — anyone in the list without a phone
+   * is silently skipped, same as the default flow.
+   */
+  sendReminders(ctx: OperationContext, body: string, personIds?: string[]): Promise<SendResult> {
+    return this.dispatch(ctx, SmsCampaignKind.REMINDER, body, (tx) =>
+      personIds && personIds.length > 0
+        ? this.specificWithPhone(tx, personIds)
+        : this.unpaidWithPhone(tx),
+    );
   }
 
-  /** Broadcast an announcement to every contributor with a phone. */
-  sendAnnouncement(ctx: OperationContext, body: string): Promise<SendResult> {
-    return this.dispatch(ctx, SmsCampaignKind.ANNOUNCEMENT, body, (tx) => this.allWithPhone(tx));
+  /**
+   * Broadcast an announcement. Default: every contributor with a phone. Pass
+   * `personIds` to target exactly those contributors instead.
+   */
+  sendAnnouncement(
+    ctx: OperationContext,
+    body: string,
+    personIds?: string[],
+  ): Promise<SendResult> {
+    return this.dispatch(ctx, SmsCampaignKind.ANNOUNCEMENT, body, (tx) =>
+      personIds && personIds.length > 0
+        ? this.specificWithPhone(tx, personIds)
+        : this.allWithPhone(tx),
+    );
   }
 
   private async dispatch(
@@ -295,6 +324,21 @@ export class SmsService {
     return tx.$queryRaw<Recipient[]>`
       SELECT p.id AS person_id, p.display_name, p.phone
       FROM person p WHERE p.phone IS NOT NULL ORDER BY p.display_name ASC
+    `;
+  }
+
+  /**
+   * Exactly the given contributors (manual/panel selection) — RLS still
+   * scopes this to the current event, so an id from another event resolves
+   * to nothing rather than leaking cross-tenant. Anyone without a phone is
+   * silently excluded, same as the default resolvers.
+   */
+  private specificWithPhone(tx: TenantTx, personIds: string[]): Promise<Recipient[]> {
+    return tx.$queryRaw<Recipient[]>`
+      SELECT p.id AS person_id, p.display_name, p.phone
+      FROM person p
+      WHERE p.phone IS NOT NULL AND p.id = ANY(${personIds}::uuid[])
+      ORDER BY p.display_name ASC
     `;
   }
 }

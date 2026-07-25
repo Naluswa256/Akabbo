@@ -253,6 +253,7 @@ export class ReportService {
     const rows = all.slice(start, start + pageSize).map((r) => {
       const owed = outstanding(r._committed, r._received);
       return {
+        personId: r.id,
         name: r.displayName,
         group: r.groupName,
         amount: moneyToString(r._received),
@@ -290,7 +291,7 @@ export class ReportService {
     filters: ReportFilters,
     resolvedGroupId?: string,
   ): Promise<
-    { displayName: string; groupName?: string; _committed: bigint; _received: bigint }[]
+    { id: string; displayName: string; groupName?: string; _committed: bigint; _received: bigint }[]
   > {
     const people = await this.prisma.person.findMany({
       where: {
@@ -327,6 +328,7 @@ export class ReportService {
         for (const f of pl.fulfillments) received += f.value;
       }
       return {
+        id: p.id,
         displayName: p.displayName,
         groupName: p.groups[0]?.group.name,
         _committed: committed,

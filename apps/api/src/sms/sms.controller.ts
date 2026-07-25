@@ -23,10 +23,19 @@ export class SmsController {
     return this.membership.requireContext(actor, eventId).then((event) => ({ actor, event }));
   }
 
-  /** Who's outstanding + can we afford to remind them all? */
+  /**
+   * Who's outstanding + can we afford to remind them all? Pass repeated
+   * `?personIds=` query params to preview a specific selection instead of
+   * the default "everyone outstanding" set.
+   */
   @Get('preview')
-  async preview(@CurrentActor() actor: Actor, @Param('eventId') eventId: string) {
-    return this.sms.previewReminders(await this.ctx(actor, eventId));
+  async preview(
+    @CurrentActor() actor: Actor,
+    @Param('eventId') eventId: string,
+    @Query('personIds') personIds?: string | string[],
+  ) {
+    const ids = personIds ? (Array.isArray(personIds) ? personIds : [personIds]) : undefined;
+    return this.sms.previewReminders(await this.ctx(actor, eventId), ids);
   }
 
   @Post('reminders')
@@ -35,7 +44,7 @@ export class SmsController {
     @Param('eventId') eventId: string,
     @Body() dto: SendSmsDto,
   ) {
-    return this.sms.sendReminders(await this.ctx(actor, eventId), dto.body);
+    return this.sms.sendReminders(await this.ctx(actor, eventId), dto.body, dto.personIds);
   }
 
   @Post('announcement')
@@ -44,7 +53,7 @@ export class SmsController {
     @Param('eventId') eventId: string,
     @Body() dto: SendSmsDto,
   ) {
-    return this.sms.sendAnnouncement(await this.ctx(actor, eventId), dto.body);
+    return this.sms.sendAnnouncement(await this.ctx(actor, eventId), dto.body, dto.personIds);
   }
 
   @Get('campaigns')

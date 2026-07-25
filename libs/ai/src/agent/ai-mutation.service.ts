@@ -6,7 +6,7 @@ import {
   PermissionService,
   assertEventWritable,
 } from '@akabbo/access';
-import { GroupService, MembershipService, TenantContext } from '@akabbo/ledger';
+import { GroupService, MembershipService, PersonService, TenantContext } from '@akabbo/ledger';
 import { AnnouncementService } from '@akabbo/transparency';
 import { SmsService } from '@akabbo/comms';
 import { EntityResolver } from '../entity-resolver.service';
@@ -47,6 +47,7 @@ export class AiMutationService {
     private readonly sms: SmsService,
     private readonly entitlements: EntitlementService,
     private readonly membership: MembershipService,
+    private readonly people: PersonService,
   ) {}
 
   // ── Side effects (next-increment §5/§6): announcements + reminders ───────────
@@ -228,6 +229,30 @@ export class AiMutationService {
         : GroupKind.OTHER;
     const group = await this.groups.createGroup(ctx, name.trim(), groupKind);
     return { status: 'done', message: `Created group "${group.name}".`, data: group };
+  }
+
+  /**
+   * Attach/correct a contributor's phone number — "Jesse's contact is 07…,
+   * save it", or backfilling someone added earlier without one. Executes
+   * immediately (low-risk, doesn't move money or send anything by itself) —
+   * this is also the fix for the AI previously claiming a phone was "noted"
+   * with no tool that could actually persist it. Without a phone on file, a
+   * contributor is silently excluded from every SMS reminder/announcement.
+   */
+  async updateContact(
+    ctx: OperationContext,
+    personName: string,
+    phone: string,
+  ): Promise<StageResult> {
+    if (!phone.trim()) return clarify('What is the phone number?');
+    const person = await this.resolver.resolvePerson(ctx.event.eventId, personName);
+    if (person.status === 'ambiguous') return ambiguous(person.candidates);
+    if (person.status !== 'resolved') return clarify(`I don't know anyone called ${personName}.`);
+    await this.people.updateContact(ctx, person.personId, phone.trim());
+    return {
+      status: 'done',
+      message: `Saved ${phone.trim()} for ${person.displayName} — they can now receive SMS reminders.`,
+    };
   }
 
   async assignToGroup(

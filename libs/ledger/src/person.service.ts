@@ -82,6 +82,47 @@ export class PersonService {
     });
   }
 
+  /**
+   * Attach/correct a contributor's phone number after the fact — e.g. "Jesse's
+   * contact is 07…, make sure to save it" said as a follow-up, or a contributor
+   * created without one earlier in the conversation. Low-risk (doesn't move
+   * money or send anything by itself), so it executes immediately like a group
+   * assignment rather than staging for confirmation. This is also what makes
+   * SMS reminders actually reachable — without a phone on file, a contributor
+   * is silently excluded from every reminder/announcement blast.
+   */
+  async updateContact(ctx: OperationContext, personId: string, phone: string): Promise<PersonView> {
+    this.permissions.assert(ctx.event.role, 'person:write');
+    assertEventWritable(ctx.event.status);
+
+    return this.tenant.runInEvent(ctx.event.eventId, async (tx) => {
+      const before = await tx.person.findFirst({
+        where: { id: personId },
+        select: { phone: true },
+      });
+      if (!before) throw new NotFoundException('Person not found in this event');
+
+      const updated = await tx.person.update({
+        where: { id: personId },
+        data: { phone },
+        select: { id: true, displayName: true, phone: true, source: true, userId: true },
+      });
+
+      await this.audit.write(tx, {
+        eventId: ctx.event.eventId,
+        actorUserId: ctx.actor.userId,
+        action: 'person:update_contact',
+        resourceType: 'person',
+        resourceId: personId,
+        source: ProvenanceSource.human_typed,
+        oldValue: { phone: before.phone },
+        newValue: { phone },
+      });
+
+      return updated;
+    });
+  }
+
   /** List contributors in the event (read gate). */
   async listPeople(ctx: OperationContext): Promise<PersonView[]> {
     this.permissions.assert(ctx.event.role, 'ledger:read_amounts');

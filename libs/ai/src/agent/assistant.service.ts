@@ -541,6 +541,14 @@ export class AssistantService {
               String(args.groupName ?? ''),
             ),
           );
+        case 'update_contact':
+          return this.staged(
+            await this.mutations.updateContact(
+              ctx,
+              String(args.personName ?? ''),
+              String(args.phone ?? ''),
+            ),
+          );
 
         default:
           return json({ error: `unknown tool: ${name}` });
@@ -1664,10 +1672,17 @@ export const AGENT_TOOL_SPECS: LlmToolSpec[] = [
   {
     name: 'add_person',
     description:
-      'Add a CONTRIBUTOR — someone who pledges or gives money to the event. NOT for committee members or people who need to log in / manage the event (use invite_member for those). Staged for confirmation.',
+      'Add a CONTRIBUTOR — someone who pledges or gives money to the event. NOT for committee members or people who need to log in / manage the event (use invite_member for those). Staged for confirmation. ' +
+      'If the user states a phone number in the same message, ALWAYS pass it as `phone` — without it, this contributor cannot receive SMS reminders or announcements.',
     parameters: {
       type: 'object',
-      properties: { displayName: { type: 'string' } },
+      properties: {
+        displayName: { type: 'string' },
+        phone: {
+          type: 'string',
+          description: "The contributor's phone number, if the user mentioned one.",
+        },
+      },
       required: ['displayName'],
     },
   },
@@ -1860,6 +1875,21 @@ export const AGENT_TOOL_SPECS: LlmToolSpec[] = [
         groupName: { type: 'string' },
       },
       required: ['personName', 'groupName'],
+    },
+  },
+  {
+    name: 'update_contact',
+    description:
+      'Save or correct an EXISTING contributor\'s phone number — e.g. "Jesse\'s number is 07...", or when a contributor was added without one earlier. ' +
+      'Use this whenever a phone number is mentioned for someone who already exists — never just acknowledge it in words, since nothing else persists it. ' +
+      'Without a phone on file, that contributor is silently excluded from every SMS reminder and announcement.',
+    parameters: {
+      type: 'object',
+      properties: {
+        personName: { type: 'string' },
+        phone: { type: 'string' },
+      },
+      required: ['personName', 'phone'],
     },
   },
   {

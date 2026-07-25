@@ -14,6 +14,9 @@ const amountString = z.string().regex(/^\d+$/, 'amount must be integer minor uni
 
 export const addPersonArgs = z.object({
   displayName: z.string().min(1).max(200),
+  /** Optional — captured when the user states it in the same breath, so the
+   *  contributor is reachable by SMS from the moment they're added. */
+  phone: z.string().min(1).max(20).optional(),
 });
 
 export const recordPledgeArgs = z.object({
@@ -65,7 +68,10 @@ export const LLM_TOOL_SPECS = [
     description: 'Add a new contributor (person) to the event.',
     parameters: {
       type: 'object',
-      properties: { displayName: { type: 'string' } },
+      properties: {
+        displayName: { type: 'string' },
+        phone: { type: 'string', description: 'Optional — capture it if the user states it.' },
+      },
       required: ['displayName'],
     },
   },

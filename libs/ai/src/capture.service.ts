@@ -1060,10 +1060,11 @@ export class CaptureService {
     | { type: 'clarify'; result: CaptureResult }
   > {
     if (call.tool === 'add_person') {
+      const phoneNote = call.args.phone ? ` (${call.args.phone})` : '';
       return {
         type: 'action',
-        action: { tool: 'add_person', displayName: call.args.displayName },
-        prompt: `Add ${call.args.displayName} as a contributor?`,
+        action: { tool: 'add_person', displayName: call.args.displayName, phone: call.args.phone },
+        prompt: `Add ${call.args.displayName}${phoneNote} as a contributor?`,
       };
     }
 

@@ -24,7 +24,7 @@ export interface ExecutionResult {
  * `run` executes — so the direct path and the confirm path share one executor.
  */
 export type StoredAction =
-  | { tool: 'add_person'; displayName: string }
+  | { tool: 'add_person'; displayName: string; phone?: string }
   | {
       tool: 'record_pledge';
       personId?: string;
@@ -92,7 +92,7 @@ export class ToolExecutor {
   ): Promise<ExecutionResult> {
     switch (action.tool) {
       case 'add_person':
-        return this.addPerson(ctx, action.displayName, source);
+        return this.addPerson(ctx, action.displayName, source, action.phone);
       case 'record_pledge':
         return this.recordPledge(
           ctx,
@@ -258,9 +258,11 @@ export class ToolExecutor {
     ctx: OperationContext,
     displayName: string,
     source: ProvenanceSource,
+    phone?: string,
   ): Promise<ExecutionResult> {
-    const person = await this.people.createPerson(ctx, { displayName, source });
-    return { message: `Added ${person.displayName}.`, data: person };
+    const person = await this.people.createPerson(ctx, { displayName, source, phone });
+    const reach = person.phone ? '' : " (no phone on file — they won't be reachable by SMS yet)";
+    return { message: `Added ${person.displayName}.${reach}`, data: person };
   }
 
   async recordPledge(

@@ -137,10 +137,11 @@ export class AssistantService {
     eventId: string | null,
     userId?: string,
   ): Promise<{ eventId?: string; accountId?: string }> {
-    if (eventId) return { eventId };
-    if (!userId) return {};
-    const account = await this.billing.ensureBillingAccount(userId);
-    return { accountId: account.id };
+    const account = userId ? await this.billing.ensureBillingAccount(userId) : null;
+    return {
+      ...(eventId ? { eventId } : {}),
+      ...(account ? { accountId: account.id } : {}),
+    };
   }
 
   /**

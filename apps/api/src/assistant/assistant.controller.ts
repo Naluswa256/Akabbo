@@ -1,6 +1,6 @@
-import { Body, Controller, Post, UseGuards } from '@nestjs/common';
+import { Controller, Body, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { Actor } from '@akabbo/access';
-import { ConversationOrchestrator } from '@akabbo/ai';
+import { ConversationOrchestrator, ConversationService } from '@akabbo/ai';
 import { AuthGuard } from '../auth/auth.guard';
 import { CurrentActor } from '../auth/current-actor.decorator';
 import { ConverseDto } from './assistant.dto';
@@ -15,10 +15,25 @@ import { ConverseDto } from './assistant.dto';
 @Controller('assistant')
 @UseGuards(AuthGuard)
 export class AssistantController {
-  constructor(private readonly orchestrator: ConversationOrchestrator) {}
+  constructor(
+    private readonly orchestrator: ConversationOrchestrator,
+    private readonly conversations: ConversationService,
+  ) {}
 
   @Post()
   async converse(@CurrentActor() actor: Actor, @Body() dto: ConverseDto) {
     return this.orchestrator.converse(actor, dto.message, dto.conversationId);
+  }
+
+  /** "Resume where you left off" — the caller's own conversations, most recent first. */
+  @Get('conversations')
+  async listConversations(@CurrentActor() actor: Actor) {
+    return this.conversations.listMine(actor.userId);
+  }
+
+  /** Full message history for one conversation, oldest first — for reloading the chat UI after a refresh. */
+  @Get('conversations/:id/messages')
+  async getMessages(@CurrentActor() actor: Actor, @Param('id') id: string) {
+    return this.conversations.getMessages(id, actor);
   }
 }

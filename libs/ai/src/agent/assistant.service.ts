@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { ForbiddenException, Inject, Injectable, Logger } from '@nestjs/common';
-import { OperationContext } from '@akabbo/access';
+import { EntitlementService, OperationContext } from '@akabbo/access';
 import { BillingService } from '@akabbo/billing';
 import {
   LLM_PROVIDER,
@@ -66,6 +66,7 @@ export class AssistantService {
     private readonly capture: CaptureService,
     private readonly mutations: AiMutationService,
     private readonly meter: UsageMeter,
+    private readonly entitlements: EntitlementService,
     private readonly billing: BillingService,
     private readonly telemetry: TelemetryService,
     private readonly dynamicContext: DynamicContextService,
@@ -99,6 +100,9 @@ export class AssistantService {
       history,
       ctx.event.role,
       ctx.actor.userId,
+      // No "which of my events has credits" fallback needed: eventId is
+      // always set on this fixed-context surface.
+      undefined,
     );
   }
 
@@ -121,27 +125,55 @@ export class AssistantService {
       history,
       undefined,
       session.actor.userId,
+      () => session.listMyEvents(),
     );
   }
 
   /**
-   * Where the AI credit for this turn is spent. `{eventId}` when the
-   * conversation has an active event; otherwise the caller's ACCOUNT — this
-   * is what makes a brand-new conversation's very first message ("create a
-   * wedding for...") actually able to draw on the signup free-trial credits,
-   * which are granted at the account level, not per event (see
-   * BillingService.startAccountTrial). Without this fallback, `use_ai` would
-   * see an empty scope and always read a balance of 0 before any event exists.
+   * Where the AI credit for this turn is spent.
+   *
+   * DELIBERATELY mutually exclusive — eventId XOR accountId, never both. If
+   * an event is active, EntitlementService.resolve() derives the account from
+   * the EVENT'S OWNER via owningAccountId(eventId); it must never also see the
+   * CALLER's own accountId here, or it prefers that (the wrong one — a
+   * co-organizer's own, likely-empty account) over the owner's, which is
+   * exactly the bug that caused a paying account to read 0 AI credits.
+   *
+   * When there is NO active event yet (a brand-new "hey" before the AI knows
+   * which event is meant), don't just check the bare account: a user can have
+   * paid for AI usage on a SPECIFIC event (an event-scoped pack) with nothing
+   * at the account level, and must not be blocked before the AI even gets a
+   * chance to ask which event they mean. Checks the account first (the common
+   * signup-trial case), then falls back to whichever of the user's own events
+   * has a usable balance — found via `listMyEvents` (RLS-safe: it goes through
+   * EventService.listMyEvents()/TenantContext.runAsUser, since `event_member`
+   * is RLS-scoped per-event and can't be queried across events with a plain
+   * client the way EntitlementService's non-RLS billing tables can).
    */
   private async resolveCreditScope(
     eventId: string | null,
     userId?: string,
+    listMyEvents?: () => Promise<{ id: string; status: string }[]>,
   ): Promise<{ eventId?: string; accountId?: string }> {
-    const account = userId ? await this.billing.ensureBillingAccount(userId) : null;
-    return {
-      ...(eventId ? { eventId } : {}),
-      ...(account ? { accountId: account.id } : {}),
-    };
+    if (eventId) return { eventId };
+    if (!userId) return {};
+    const account = await this.billing.ensureBillingAccount(userId);
+    const accountBalance = await this.billing.aiBalance({ accountId: account.id });
+    if (accountBalance > 0) return { accountId: account.id };
+
+    if (listMyEvents) {
+      const writable = new Set(['DRAFT', 'ACTIVE', 'PAUSED']);
+      const myEvents = await listMyEvents();
+      let best: { eventId: string; balance: number } | null = null;
+      for (const e of myEvents) {
+        if (!writable.has(e.status)) continue;
+        const balance = await this.entitlements.resolve({ eventId: e.id }).then((r) => r.aiBalance);
+        if (balance > 0 && (!best || balance > best.balance)) best = { eventId: e.id, balance };
+      }
+      if (best) return { eventId: best.eventId };
+    }
+
+    return { accountId: account.id };
   }
 
   /**
@@ -158,10 +190,11 @@ export class AssistantService {
     history: LlmMessage[],
     userRole?: string,
     userId?: string,
+    listMyEvents?: () => Promise<{ id: string; status: string }[]>,
   ): Promise<ChatResult> {
     const startTime = Date.now();
     const initialEventId = meterEventId();
-    const scope = await this.resolveCreditScope(initialEventId, userId);
+    const scope = await this.resolveCreditScope(initialEventId, userId, listMyEvents);
     const reserveKey = `ai-turn:${randomUUID()}`;
     const reserved = await this.billing.reserveAiCredit(scope, reserveKey);
     if (!reserved.ok) {

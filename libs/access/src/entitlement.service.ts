@@ -151,17 +151,25 @@ export class EntitlementService {
 
   /**
    * The effective plan + balance for a scope. Falls back to FREE limits.
-   * `owningAccountId` is resolved ONCE here and threaded through — resolving
-   * it separately per lookup (as this used to) meant two `findFirst` calls
-   * with no explicit ordering could each pick a DIFFERENT account row if a
-   * user ever ends up with more than one (no unique constraint on
-   * ownerUserId today), making a single `resolve()` call internally
-   * inconsistent with itself, e.g. `activeGrant` reporting a paid plan while
-   * `aiBalance` reads a balance of 0 from a different, empty account.
+   *
+   * The single authoritative rule for which account applies, decided HERE
+   * ONLY: if `eventId` is present, the account is ALWAYS that event's real
+   * owner (via `owningAccountId`) — NEVER `scope.accountId`, even if a caller
+   * also set it. `activeGrant`/`scopeWhere` below trust this resolved value
+   * verbatim rather than re-deriving it, so there is exactly one place this
+   * precedence can be decided (and get it wrong). A caller's own accountId
+   * only matters when there is no event in the scope at all.
+   *
+   * This is load-bearing: a scope carrying both `eventId` and the ACTING
+   * user's own `accountId` (e.g. a co-organizer chatting inside an event they
+   * don't own) must never let that caller's own — likely empty — account
+   * shadow the event owner's real credits. That exact inversion is what
+   * caused a paying account to read 0 AI credits in production.
    */
   async resolve(scope: EntitlementScope): Promise<ResolvedEntitlement> {
-    const accountId =
-      scope.accountId ?? (scope.eventId ? await this.owningAccountId(scope.eventId) : null);
+    const accountId = scope.eventId
+      ? await this.owningAccountId(scope.eventId)
+      : (scope.accountId ?? null);
     const grant = await this.activeGrant(scope, accountId);
     const plan = grant ? await this.plan(grant.planCode) : await this.plan('FREE');
     const smsBalance = await this.smsBalance(scope, accountId);
@@ -211,17 +219,14 @@ export class EntitlementService {
   ): Promise<{ planCode: string; status: GrantStatus } | null> {
     const activeStates = [GrantStatus.TRIALING, GrantStatus.ACTIVE];
     const eventId = scope.eventId;
-    const targetAccountId = scope.accountId ?? accountId;
-
-    if (!eventId && !targetAccountId) return null;
+    // `accountId` is already the correctly-precedenced value from resolve() —
+    // never re-derive it from scope.accountId here (see resolve()'s docs).
+    if (!eventId && !accountId) return null;
 
     const candidates = await this.prisma.entitlementGrant.findMany({
       where: {
         status: { in: activeStates },
-        OR: [
-          ...(eventId ? [{ eventId }] : []),
-          ...(targetAccountId ? [{ accountId: targetAccountId }] : []),
-        ],
+        OR: [...(eventId ? [{ eventId }] : []), ...(accountId ? [{ accountId }] : [])],
       },
       orderBy: { plan: { priceMinor: 'desc' } },
       select: { status: true, plan: { select: { code: true } } },
@@ -258,15 +263,18 @@ export class EntitlementService {
     return account?.id ?? null;
   }
 
-  /** Ledger rows for either scope key, pooled — see {@link owningAccountId}. */
+  /**
+   * Ledger rows for either scope key, pooled — see {@link owningAccountId}.
+   * `accountId` is the already-precedenced value from resolve(); never
+   * re-derive it from `scope.accountId` here (see resolve()'s docs).
+   */
   private scopeWhere(
     scope: EntitlementScope,
     accountId: string | null,
   ): { eventId?: string; accountId?: string }[] {
-    const targetAccountId = scope.accountId ?? accountId;
     const OR: { eventId?: string; accountId?: string }[] = [];
     if (scope.eventId) OR.push({ eventId: scope.eventId });
-    if (targetAccountId) OR.push({ accountId: targetAccountId });
+    if (accountId) OR.push({ accountId });
     return OR;
   }
 

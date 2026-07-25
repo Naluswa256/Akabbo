@@ -363,11 +363,14 @@ export class BillingService implements OnModuleInit {
     idempotencyKey: string,
     reference?: string,
   ): Promise<void> {
+    const accountId =
+      scope.accountId ??
+      (scope.eventId ? await this.entitlements.owningAccountId(scope.eventId) : null);
     try {
       await this.prisma.smsCreditLedger.create({
         data: {
           eventId: scope.eventId ?? null,
-          accountId: scope.accountId ?? null,
+          accountId: accountId ?? null,
           kind,
           amount,
           idempotencyKey,
@@ -388,11 +391,14 @@ export class BillingService implements OnModuleInit {
     idempotencyKey: string,
     reference?: string,
   ): Promise<void> {
+    const accountId =
+      scope.accountId ??
+      (scope.eventId ? await this.entitlements.owningAccountId(scope.eventId) : null);
     try {
       await this.prisma.aiCreditLedger.create({
         data: {
           eventId: scope.eventId ?? null,
-          accountId: scope.accountId ?? null,
+          accountId: accountId ?? null,
           kind: AiLedgerKind.GRANT,
           amount,
           idempotencyKey,
@@ -411,11 +417,14 @@ export class BillingService implements OnModuleInit {
     idempotencyKey: string,
     reference?: string,
   ): Promise<void> {
+    const accountId =
+      scope.accountId ??
+      (scope.eventId ? await this.entitlements.owningAccountId(scope.eventId) : null);
     try {
       await this.prisma.aiCreditLedger.create({
         data: {
           eventId: scope.eventId ?? null,
-          accountId: scope.accountId ?? null,
+          accountId: accountId ?? null,
           kind: AiLedgerKind.DEDUCT,
           amount: -1,
           idempotencyKey,
@@ -468,11 +477,14 @@ export class BillingService implements OnModuleInit {
     idempotencyKey: string,
     reference?: string,
   ): Promise<void> {
+    const accountId =
+      scope.accountId ??
+      (scope.eventId ? await this.entitlements.owningAccountId(scope.eventId) : null);
     try {
       await this.prisma.aiCreditLedger.create({
         data: {
           eventId: scope.eventId ?? null,
-          accountId: scope.accountId ?? null,
+          accountId: accountId ?? null,
           kind,
           amount,
           idempotencyKey,

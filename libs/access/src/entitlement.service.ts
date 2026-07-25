@@ -210,20 +210,18 @@ export class EntitlementService {
     accountId: string | null,
   ): Promise<{ planCode: string; status: GrantStatus } | null> {
     const activeStates = [GrantStatus.TRIALING, GrantStatus.ACTIVE];
-    if (scope.accountId) {
-      const g = await this.prisma.entitlementGrant.findFirst({
-        where: { accountId: scope.accountId, status: { in: activeStates } },
-        orderBy: { plan: { priceMinor: 'desc' } },
-        select: { status: true, plan: { select: { code: true } } },
-      });
-      return g ? { planCode: g.plan.code, status: g.status } : null;
-    }
-    if (!scope.eventId) return null;
+    const eventId = scope.eventId;
+    const targetAccountId = scope.accountId ?? accountId;
+
+    if (!eventId && !targetAccountId) return null;
 
     const candidates = await this.prisma.entitlementGrant.findMany({
       where: {
         status: { in: activeStates },
-        OR: [{ eventId: scope.eventId }, ...(accountId ? [{ accountId }] : [])],
+        OR: [
+          ...(eventId ? [{ eventId }] : []),
+          ...(targetAccountId ? [{ accountId: targetAccountId }] : []),
+        ],
       },
       orderBy: { plan: { priceMinor: 'desc' } },
       select: { status: true, plan: { select: { code: true } } },
@@ -246,7 +244,7 @@ export class EntitlementService {
    * longest-lived account) instead of an unordered `LIMIT 1` that Postgres
    * gives no guarantee will return the same row twice.
    */
-  private async owningAccountId(eventId: string): Promise<string | null> {
+  async owningAccountId(eventId: string): Promise<string | null> {
     const event = await this.prisma.event.findUnique({
       where: { id: eventId },
       select: { ownerUserId: true },
@@ -265,9 +263,11 @@ export class EntitlementService {
     scope: EntitlementScope,
     accountId: string | null,
   ): { eventId?: string; accountId?: string }[] {
-    if (scope.accountId) return [{ accountId: scope.accountId }];
-    if (!scope.eventId) return [];
-    return accountId ? [{ eventId: scope.eventId }, { accountId }] : [{ eventId: scope.eventId }];
+    const targetAccountId = scope.accountId ?? accountId;
+    const OR: { eventId?: string; accountId?: string }[] = [];
+    if (scope.eventId) OR.push({ eventId: scope.eventId });
+    if (targetAccountId) OR.push({ accountId: targetAccountId });
+    return OR;
   }
 
   private async smsBalance(scope: EntitlementScope, accountId: string | null): Promise<number> {

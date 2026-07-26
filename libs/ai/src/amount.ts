@@ -20,3 +20,17 @@ export function parseAmountToMinorUnits(input: string): bigint | null {
   if (!Number.isInteger(scaled)) return null;
   return BigInt(scaled);
 }
+
+/**
+ * Format integer minor units with thousands separators for human-facing AI
+ * prose (tool-result messages, staged-action prompts). Display-only — never
+ * use this for API/JSON money fields, which stay plain digit strings
+ * (moneyToString) so the frontend/DB can parse them as numbers.
+ */
+export function formatAmount(value: string | bigint): string {
+  const raw = typeof value === 'bigint' ? value.toString() : value;
+  const negative = raw.startsWith('-');
+  const digits = negative ? raw.slice(1) : raw;
+  const withCommas = digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return negative ? `-${withCommas}` : withCommas;
+}

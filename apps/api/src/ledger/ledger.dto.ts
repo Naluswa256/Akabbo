@@ -100,6 +100,11 @@ export class CorrectPledgeDto {
   committedValue!: string;
 }
 
+export class CorrectFulfillmentDto {
+  @Matches(MONEY, { message: 'value must be an integer (minor units)' })
+  value!: string;
+}
+
 export class AddBudgetItemDto {
   @IsString()
   @Length(1, 200)

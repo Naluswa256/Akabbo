@@ -130,6 +130,8 @@ export class FulfillmentService {
         await this.assertNotDuplicate(tx, input.pledgeId, input.value);
       }
 
+      await this.assertWithinCommitted(tx, input.pledgeId, pledge.committedValue, input.value);
+
       return this.writeFulfillment(tx, ctx, {
         pledgeId: input.pledgeId,
         committedValue: pledge.committedValue,
@@ -269,6 +271,14 @@ export class FulfillmentService {
       });
       if (!person) throw new NotFoundException('Person not found in this event');
 
+      const receivedNow = input.receivedNow ?? 0n;
+      if (receivedNow > input.committedValue) {
+        throw new ForbiddenException(
+          `Received amount (${moneyToString(receivedNow)}) can't exceed the pledge itself ` +
+            `(${moneyToString(input.committedValue)}).`,
+        );
+      }
+
       const source = input.source ?? ProvenanceSource.human_typed;
       const pledge = await tx.pledge.create({
         data: {
@@ -293,7 +303,6 @@ export class FulfillmentService {
         newValue: { personId: input.personId, committedValue: moneyToString(pledge.committedValue) },
       });
 
-      const receivedNow = input.receivedNow ?? 0n;
       if (receivedNow <= 0n) {
         // Plain pledge, nothing paid yet — same shape callers already expect
         // from a fulfillment-less pledge (outstanding = the full amount).
@@ -342,6 +351,22 @@ export class FulfillmentService {
         select: { id: true, pledgeId: true, value: true },
       });
       if (!current) throw new NotFoundException('Payment not found in this event');
+
+      const pledgeBefore = await tx.pledge.findFirst({
+        where: { id: current.pledgeId },
+        select: { committedValue: true },
+      });
+      if (pledgeBefore) {
+        // Bound check excludes THIS fulfillment's own current value from the
+        // existing sum, since it's being replaced, not added on top of itself.
+        await this.assertWithinCommitted(
+          tx,
+          current.pledgeId,
+          pledgeBefore.committedValue,
+          newValue,
+          fulfillmentId,
+        );
+      }
 
       const updated = await tx.fulfillment.update({
         where: { id: fulfillmentId },
@@ -448,6 +473,36 @@ export class FulfillmentService {
         similar.id,
         moneyToString(similar.value),
         similar.createdAt.toISOString(),
+      );
+    }
+  }
+
+  /**
+   * A pledge can never be fulfilled beyond what was committed — once fully
+   * paid (outstanding = 0), no further split/payment can be added, and no
+   * correction can push the total over the committed amount either.
+   * `excludeFulfillmentId` is set when correcting an EXISTING fulfillment,
+   * so its own prior value isn't double-counted against itself.
+   */
+  private async assertWithinCommitted(
+    tx: TenantTx,
+    pledgeId: string,
+    committedValue: bigint,
+    additionalValue: bigint,
+    excludeFulfillmentId?: string,
+  ): Promise<void> {
+    const agg = await tx.fulfillment.aggregate({
+      where: { pledgeId, ...(excludeFulfillmentId ? { id: { not: excludeFulfillmentId } } : {}) },
+      _sum: { value: true },
+    });
+    const existing = agg._sum.value ?? 0n;
+    const projected = existing + additionalValue;
+    if (projected > committedValue) {
+      const remaining = outstanding(committedValue, existing);
+      throw new ForbiddenException(
+        `This pledge is already fully accounted for beyond that: only ${moneyToString(remaining)} ` +
+          `remains outstanding (committed ${moneyToString(committedValue)}, already recorded ` +
+          `${moneyToString(existing)}). Correct the pledge amount first if it should be higher.`,
       );
     }
   }

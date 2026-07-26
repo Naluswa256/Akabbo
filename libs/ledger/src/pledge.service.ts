@@ -1,5 +1,12 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { PledgeStatus, PledgeType, ProvenanceSource } from '@prisma/client';
+import {
+  FulfillmentKind,
+  PaymentMethod,
+  PledgeStatus,
+  PledgeType,
+  ProvenanceSource,
+  VerificationStatus,
+} from '@prisma/client';
 import {
   EntitlementService,
   OperationContext,
@@ -8,7 +15,7 @@ import {
 } from '@akabbo/access';
 import { TenantContext, TenantTx } from './tenant-context.service';
 import { AuditWriter } from './audit.writer';
-import { deriveStatus } from './pledge-status';
+import { deriveStatus, outstanding } from './pledge-status';
 import { moneyToString } from './money';
 
 export interface CreatePledgeInput {
@@ -33,6 +40,26 @@ export interface PledgeView {
   committedValue: string;
   status: PledgeStatus;
   source: ProvenanceSource;
+}
+
+/** One split (partial payment) recorded against a pledge. */
+export interface PledgeSplitView {
+  id: string;
+  value: string;
+  kind: FulfillmentKind;
+  method: PaymentMethod;
+  verificationStatus: VerificationStatus;
+  note: string | null;
+  occurredAt: Date;
+}
+
+/** A pledge plus its person and every split recorded against it — the shape
+ *  the manual contributions/pledges edit panel lists and edits. */
+export interface PledgeWithSplitsView extends PledgeView {
+  personName: string;
+  personPhone: string | null;
+  outstanding: string;
+  fulfillments: PledgeSplitView[];
 }
 
 /**
@@ -159,6 +186,66 @@ export class PledgeService {
       });
 
       return this.toView(updated);
+    });
+  }
+
+  /**
+   * List every pledge with its person and full split history, for the manual
+   * edit panel (list contributions/pledges, add/edit splits until fulfilled).
+   */
+  async listPledges(ctx: OperationContext, personId?: string): Promise<PledgeWithSplitsView[]> {
+    this.permissions.assert(ctx.event.role, 'ledger:read_amounts');
+
+    return this.tenant.runInEvent(ctx.event.eventId, async (tx) => {
+      const pledges = await tx.pledge.findMany({
+        where: personId ? { personId } : undefined,
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          personId: true,
+          type: true,
+          committedValue: true,
+          status: true,
+          source: true,
+          person: { select: { displayName: true, phone: true } },
+          fulfillments: {
+            orderBy: { occurredAt: 'asc' },
+            select: {
+              id: true,
+              value: true,
+              kind: true,
+              method: true,
+              verificationStatus: true,
+              note: true,
+              occurredAt: true,
+            },
+          },
+        },
+      });
+
+      return pledges.map((p) => {
+        const totalFulfilled = p.fulfillments.reduce((sum, f) => sum + f.value, 0n);
+        return {
+          id: p.id,
+          personId: p.personId,
+          personName: p.person.displayName,
+          personPhone: p.person.phone,
+          type: p.type,
+          committedValue: moneyToString(p.committedValue),
+          status: p.status,
+          source: p.source,
+          outstanding: moneyToString(outstanding(p.committedValue, totalFulfilled)),
+          fulfillments: p.fulfillments.map((f) => ({
+            id: f.id,
+            value: moneyToString(f.value),
+            kind: f.kind,
+            method: f.method,
+            verificationStatus: f.verificationStatus,
+            note: f.note,
+            occurredAt: f.occurredAt,
+          })),
+        };
+      });
     });
   }
 

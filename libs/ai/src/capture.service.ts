@@ -7,7 +7,7 @@ import { ToolExecutor, StoredAction, ExecutionResult } from './tool-executor.ser
 import { ConfirmationService } from './confirmation.service';
 import { UsageMeter } from './usage-meter.service';
 import { parseTier1 } from './tier1-parser';
-import { parseAmountToMinorUnits } from './amount';
+import { formatAmount, parseAmountToMinorUnits } from './amount';
 import { currentDateNote } from './date-context';
 import { costMicroUsd } from './pricing';
 import { LLM_TOOL_SPECS, ToolCall, toolCallSchema } from './tools/tool-call';
@@ -1084,7 +1084,7 @@ export class CaptureService {
               receivedNow,
               type: call.args.type as PledgeType | undefined,
             },
-            prompt: `Add ${name} as a contributor, record their pledge of ${call.args.amount}, and ${receivedNow} already received?`,
+            prompt: `Add ${name} as a contributor, record their pledge of ${formatAmount(call.args.amount)}, and ${formatAmount(receivedNow)} already received?`,
           };
         }
         return {
@@ -1095,7 +1095,7 @@ export class CaptureService {
             amount: call.args.amount,
             type: call.args.type as PledgeType | undefined,
           },
-          prompt: `Add ${name} as a contributor and record their pledge of ${call.args.amount}?`,
+          prompt: `Add ${name} as a contributor and record their pledge of ${formatAmount(call.args.amount)}?`,
         };
       }
       return {
@@ -1105,7 +1105,7 @@ export class CaptureService {
           displayName: name,
           amount: call.args.amount,
         },
-        prompt: `Add ${name} as a contributor and record their contribution of ${call.args.amount}?`,
+        prompt: `Add ${name} as a contributor and record their contribution of ${formatAmount(call.args.amount)}?`,
       };
     }
     if (person.status === 'ambiguous') {
@@ -1125,7 +1125,7 @@ export class CaptureService {
             receivedNow,
             type: call.args.type as PledgeType | undefined,
           },
-          prompt: `Record ${person.displayName}'s pledge of ${call.args.amount}, with ${receivedNow} already received?`,
+          prompt: `Record ${person.displayName}'s pledge of ${formatAmount(call.args.amount)}, with ${formatAmount(receivedNow)} already received?`,
         };
       }
       return {
@@ -1137,7 +1137,7 @@ export class CaptureService {
           amount: call.args.amount,
           type: call.args.type as PledgeType | undefined,
         },
-        prompt: `Record ${person.displayName}'s pledge of ${call.args.amount}?`,
+        prompt: `Record ${person.displayName}'s pledge of ${formatAmount(call.args.amount)}?`,
       };
     }
 
@@ -1155,7 +1155,7 @@ export class CaptureService {
           displayName: person.displayName,
           amount: call.args.amount,
         },
-        prompt: `Record ${person.displayName}'s contribution of ${call.args.amount}?`,
+        prompt: `Record ${person.displayName}'s contribution of ${formatAmount(call.args.amount)}?`,
       };
     }
     if (pledge.status === 'ambiguous') {
@@ -1176,7 +1176,7 @@ export class CaptureService {
         displayName: person.displayName,
         amount: call.args.amount,
       },
-      prompt: `Record ${person.displayName}'s payment of ${call.args.amount}?`,
+      prompt: `Record ${person.displayName}'s payment of ${formatAmount(call.args.amount)}?`,
     };
   }
 

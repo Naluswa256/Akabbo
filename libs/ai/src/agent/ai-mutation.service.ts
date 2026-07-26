@@ -12,7 +12,7 @@ import { SmsService } from '@akabbo/comms';
 import { EntityResolver } from '../entity-resolver.service';
 import { ConfirmationService } from '../confirmation.service';
 import { StoredAction } from '../tool-executor.service';
-import { parseAmountToMinorUnits } from '../amount';
+import { formatAmount, parseAmountToMinorUnits } from '../amount';
 
 /** Uniform outcome the agent turns into a tool result for the model. */
 export interface StageResult {
@@ -304,7 +304,7 @@ export class AiMutationService {
     return this.stage(
       ctx,
       { tool: 'create_budget_item', name: name.trim(), targetValue: value.toString() },
-      `Add budget item "${name.trim()}" at ${value.toString()}?`,
+      `Add budget item "${name.trim()}" at ${formatAmount(value)}?`,
     );
   }
 
@@ -326,7 +326,7 @@ export class AiMutationService {
         name: item.name,
         targetValue: value.toString(),
       },
-      `Change "${item.name}" to ${value.toString()}?`,
+      `Change "${item.name}" to ${formatAmount(value)}?`,
     );
   }
 
@@ -366,7 +366,7 @@ export class AiMutationService {
         displayName: person.displayName,
         newValue: value.toString(),
       },
-      `Correct ${person.displayName}'s pledge to ${value.toString()}?`,
+      `Correct ${person.displayName}'s pledge to ${formatAmount(value)}?`,
     );
   }
 
@@ -402,7 +402,7 @@ export class AiMutationService {
         displayName: person.displayName,
         newValue: value.toString(),
       },
-      `Correct ${person.displayName}'s latest payment to ${value.toString()}?`,
+      `Correct ${person.displayName}'s latest payment to ${formatAmount(value)}?`,
     );
   }
 

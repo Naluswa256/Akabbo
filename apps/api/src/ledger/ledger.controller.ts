@@ -13,6 +13,7 @@ import {
 import { AuthGuard } from '../auth/auth.guard';
 import { CurrentActor } from '../auth/current-actor.decorator';
 import {
+  CorrectFulfillmentDto,
   CorrectPledgeDto,
   CreatePersonDto,
   AddBudgetItemDto,
@@ -114,6 +115,18 @@ export class LedgerController {
     return this.pledges.cancelPledge(await this.ctx(actor, eventId), pledgeId);
   }
 
+  /** Every pledge with its person and full split history — the manual
+   *  contributions/pledges edit panel's list view. Pass `?personId=` to drill
+   *  into a single contributor's pledges/contributions (person-detail view). */
+  @Get('pledges')
+  async listPledges(
+    @CurrentActor() actor: Actor,
+    @Param('eventId') eventId: string,
+    @Query('personId') personId?: string,
+  ) {
+    return this.pledges.listPledges(await this.ctx(actor, eventId), personId);
+  }
+
   @Get('pledges/:pledgeId/outstanding')
   async outstanding(
     @CurrentActor() actor: Actor,
@@ -139,6 +152,22 @@ export class LedgerController {
       idempotencyKey: dto.idempotencyKey,
       confirmDuplicate: dto.confirmDuplicate,
     });
+  }
+
+  /** Correct an individual split's amount — overpayment-guarded (never lets
+   *  a pledge's splits sum past its committed value). */
+  @Post('fulfillments/:fulfillmentId/correct')
+  async correctFulfillment(
+    @CurrentActor() actor: Actor,
+    @Param('eventId') eventId: string,
+    @Param('fulfillmentId') fulfillmentId: string,
+    @Body() dto: CorrectFulfillmentDto,
+  ) {
+    return this.fulfillments.correctValue(
+      await this.ctx(actor, eventId),
+      fulfillmentId,
+      parseMoney(dto.value),
+    );
   }
 
   /** A gift with no prior pledge (§15) — records commitment + discharge. */

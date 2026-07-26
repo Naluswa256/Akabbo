@@ -11,6 +11,7 @@ import {
   PledgeService,
 } from '@akabbo/ledger';
 import { SmsService } from '@akabbo/comms';
+import { formatAmount } from './amount';
 
 export interface ExecutionResult {
   /** Human-facing confirmation/answer, grounded in DB numbers (not the LLM). */
@@ -188,7 +189,10 @@ export class ToolExecutor {
     targetValue: bigint,
   ): Promise<ExecutionResult> {
     const item = await this.budget.updateItem(ctx, itemId, { name, targetValue });
-    return { message: `Updated budget item "${item.name}" to ${item.targetValue}.`, data: item };
+    return {
+      message: `Updated budget item "${item.name}" to ${formatAmount(item.targetValue)}.`,
+      data: item,
+    };
   }
 
   async removeBudgetItem(ctx: OperationContext, itemId: string): Promise<ExecutionResult> {
@@ -204,7 +208,7 @@ export class ToolExecutor {
   ): Promise<ExecutionResult> {
     const pledge = await this.pledges.correctCommittedValue(ctx, pledgeId, newValue);
     return {
-      message: `Corrected ${displayName}'s pledge to ${pledge.committedValue}.`,
+      message: `Corrected ${displayName}'s pledge to ${formatAmount(pledge.committedValue)}.`,
       data: pledge,
     };
   }
@@ -217,7 +221,7 @@ export class ToolExecutor {
   ): Promise<ExecutionResult> {
     const f = await this.fulfillments.correctValue(ctx, fulfillmentId, newValue);
     return {
-      message: `Corrected ${displayName}'s payment to ${f.value} (outstanding ${f.outstanding}).`,
+      message: `Corrected ${displayName}'s payment to ${formatAmount(f.value)} (outstanding ${formatAmount(f.outstanding)}).`,
       data: f,
     };
   }
@@ -308,7 +312,7 @@ export class ToolExecutor {
       source,
     });
     return {
-      message: `Recorded ${displayName}'s pledge of ${amount.toString()}.`,
+      message: `Recorded ${displayName}'s pledge of ${formatAmount(amount)}.`,
       data: pledge,
     };
   }
@@ -342,8 +346,8 @@ export class ToolExecutor {
     });
     return {
       message:
-        `Recorded ${displayName}'s pledge of ${committedValue.toString()}, ` +
-        `with ${receivedNow.toString()} already received. Outstanding: ${result.outstanding}.`,
+        `Recorded ${displayName}'s pledge of ${formatAmount(committedValue)}, ` +
+        `with ${formatAmount(receivedNow)} already received. Outstanding: ${formatAmount(result.outstanding)}.`,
       data: result,
     };
   }
@@ -358,8 +362,8 @@ export class ToolExecutor {
     const f = await this.fulfillments.recordFulfillment(ctx, { pledgeId, value: amount, source });
     return {
       message:
-        `Recorded ${displayName}'s payment of ${amount.toString()}. ` +
-        `Outstanding on that pledge: ${f.outstanding}.`,
+        `Recorded ${displayName}'s payment of ${formatAmount(amount)}. ` +
+        `Outstanding on that pledge: ${formatAmount(f.outstanding)}.`,
       data: f,
     };
   }
@@ -385,7 +389,7 @@ export class ToolExecutor {
       source,
     });
     return {
-      message: `Recorded ${displayName}'s contribution of ${amount.toString()}.`,
+      message: `Recorded ${displayName}'s contribution of ${formatAmount(amount)}.`,
       data: f,
     };
   }
@@ -408,7 +412,10 @@ export class ToolExecutor {
       source,
       sourceDocumentId,
     });
-    return { message: `Added budget item “${item.name}” (${item.targetValue}).`, data: item };
+    return {
+      message: `Added budget item “${item.name}” (${formatAmount(item.targetValue)}).`,
+      data: item,
+    };
   }
 
   async getOutstandingForPledge(
@@ -417,7 +424,7 @@ export class ToolExecutor {
     displayName: string,
   ): Promise<ExecutionResult> {
     const o = await this.queries.getPledgeOutstanding(ctx, pledgeId);
-    return { message: `${displayName} still owes ${o.outstanding}.`, data: o };
+    return { message: `${displayName} still owes ${formatAmount(o.outstanding)}.`, data: o };
   }
 
   /**
@@ -428,15 +435,15 @@ export class ToolExecutor {
     const r = await this.queries.getEventReport(ctx);
 
     const parts: string[] = [];
-    if (r.percentCovered !== null) {
-      parts.push(`Your event is ${r.percentCovered}% covered (target ${r.target}).`);
+    if (r.percentCovered !== null && r.target !== null) {
+      parts.push(`Your event is ${r.percentCovered}% covered (target ${formatAmount(r.target)}).`);
     }
     parts.push(
-      `Received ${r.totalReceived}, outstanding pledges ${r.totalOutstanding}, ` +
-        `committed ${r.totalCommitted}.`,
+      `Received ${formatAmount(r.totalReceived)}, outstanding pledges ${formatAmount(r.totalOutstanding)}, ` +
+        `committed ${formatAmount(r.totalCommitted)}.`,
     );
     if (r.budgetTotal !== '0') {
-      parts.push(`Unfunded budget ${r.budgetUnfunded}.`);
+      parts.push(`Unfunded budget ${formatAmount(r.budgetUnfunded)}.`);
     }
     parts.push(
       `${r.contributorCount} contributors, ${r.outstandingContributorCount} with outstanding balances.`,

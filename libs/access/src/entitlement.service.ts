@@ -255,8 +255,19 @@ export class EntitlementService {
       select: { ownerUserId: true },
     });
     if (!event) return null;
+    return this.findAccountId(event.ownerUserId);
+  }
+
+  /**
+   * A user's canonical billing account, READ-ONLY — unlike
+   * BillingService.ensureBillingAccount, this never creates one. For
+   * reporting/admin surfaces that must not have the side effect of minting a
+   * billing_account row for every user just by being viewed. Same "oldest
+   * wins" tie-break as the rest of this service.
+   */
+  async findAccountId(userId: string): Promise<string | null> {
     const account = await this.prisma.billingAccount.findFirst({
-      where: { ownerUserId: event.ownerUserId },
+      where: { ownerUserId: userId },
       orderBy: { createdAt: 'asc' },
       select: { id: true },
     });

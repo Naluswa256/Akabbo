@@ -26,6 +26,17 @@ export interface MessageView {
   createdAt: string;
 }
 
+export interface AdminConversationRow {
+  id: string;
+  userId: string;
+  userPhone: string;
+  title: string | null;
+  activeEventId: string | null;
+  messageCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** How many prior turns to replay as context (keeps the prompt bounded). */
 const HISTORY_LIMIT = 20;
 /** How many conversations to show in "resume where you left off". */
@@ -138,6 +149,60 @@ export class ConversationService {
     if (conversation.userId !== actor.userId) {
       throw new ForbiddenException('Not your conversation');
     }
+    const rows = await this.prisma.message.findMany({
+      where: { conversationId },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true, role: true, content: true, createdAt: true },
+    });
+    return rows.map((r) => ({ ...r, createdAt: r.createdAt.toISOString() }));
+  }
+
+  // ── Admin inbox (ADMIN_SECRET-gated at the controller — see AdminController) ──
+  // Deliberately separate methods rather than an "isAdmin" flag threaded through
+  // the user-facing ones above: the ownership check on getMessages() must never
+  // have a code path that can accidentally be bypassed by a normal request.
+
+  /**
+   * Every user's conversations, across the whole platform, most recently
+   * active first — "read what people asked and how the AI answered" (product
+   * quality review, not a user-facing feature). No ownership filter: this is
+   * the entire point, gated instead at the HTTP layer by ADMIN_SECRET.
+   */
+  async listAllForAdmin(limit = 50, offset = 0): Promise<AdminConversationRow[]> {
+    const rows = await this.prisma.conversation.findMany({
+      orderBy: { updatedAt: 'desc' },
+      take: limit,
+      skip: offset,
+      select: {
+        id: true,
+        title: true,
+        activeEventId: true,
+        createdAt: true,
+        updatedAt: true,
+        userId: true,
+        user: { select: { phone: true } },
+        _count: { select: { messages: true } },
+      },
+    });
+    return rows.map((r) => ({
+      id: r.id,
+      userId: r.userId,
+      userPhone: r.user.phone,
+      title: r.title,
+      activeEventId: r.activeEventId,
+      messageCount: r._count.messages,
+      createdAt: r.createdAt.toISOString(),
+      updatedAt: r.updatedAt.toISOString(),
+    }));
+  }
+
+  /** Full message history for ANY conversation, no ownership check — admin only. */
+  async getMessagesAdmin(conversationId: string): Promise<MessageView[]> {
+    const conversation = await this.prisma.conversation.findUnique({
+      where: { id: conversationId },
+      select: { id: true },
+    });
+    if (!conversation) throw new NotFoundException('Conversation not found');
     const rows = await this.prisma.message.findMany({
       where: { conversationId },
       orderBy: { createdAt: 'asc' },

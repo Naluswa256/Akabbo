@@ -23,6 +23,11 @@ export const recordPledgeArgs = z.object({
   personName: z.string().min(1),
   amount: amountString,
   type: z.enum(['CASH', 'ITEM', 'SERVICE']).optional(),
+  /** Optional — set ONLY when the user states an amount already received in
+   *  the SAME breath as the pledge ("pledged 1M, already paid 200k"). Records
+   *  both atomically as one pledge with one fulfillment against it, never two
+   *  separate pledges — see FulfillmentService.recordPledgeWithPayment. */
+  receivedNow: amountString.optional(),
 });
 
 export const recordPaymentArgs = z.object({
@@ -77,13 +82,20 @@ export const LLM_TOOL_SPECS = [
   },
   {
     name: 'record_pledge',
-    description: 'Record a pledge (a promise to contribute) by a named person.',
+    description:
+      'Record a pledge (a promise to contribute) by a named person. If the SAME message also says how much they\'ve already paid ' +
+      '(e.g. "pledged 1M, has paid 200k so far"), ALWAYS pass that as `receivedNow` here too — never call record_payment separately ' +
+      'in the same turn for a pledge just created in this call, since it cannot see the pledge until this is confirmed.',
     parameters: {
       type: 'object',
       properties: {
         personName: { type: 'string' },
         amount: { type: 'string', description: 'integer minor units, digits only' },
         type: { type: 'string', enum: ['CASH', 'ITEM', 'SERVICE'] },
+        receivedNow: {
+          type: 'string',
+          description: 'Optional — amount already paid toward this pledge, integer minor units, digits only.',
+        },
       },
       required: ['personName', 'amount'],
     },

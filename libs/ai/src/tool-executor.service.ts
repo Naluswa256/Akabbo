@@ -33,6 +33,17 @@ export type StoredAction =
       type?: PledgeType;
       phone?: string;
     }
+  /** A pledge AND its first payment, atomically — see FulfillmentService
+   *  .recordPledgeWithPayment for why this must not be two separate actions. */
+  | {
+      tool: 'record_pledge_with_payment';
+      personId?: string;
+      displayName: string;
+      amount: string;
+      receivedNow: string;
+      type?: PledgeType;
+      phone?: string;
+    }
   | { tool: 'record_payment'; pledgeId: string; displayName: string; amount: string }
   /** A gift with no prior pledge (§15) — creates the commitment and discharges it. */
   | {
@@ -99,6 +110,17 @@ export class ToolExecutor {
           action.personId,
           action.displayName,
           BigInt(action.amount),
+          source,
+          action.type,
+          action.phone,
+        );
+      case 'record_pledge_with_payment':
+        return this.recordPledgeWithPayment(
+          ctx,
+          action.personId,
+          action.displayName,
+          BigInt(action.amount),
+          BigInt(action.receivedNow),
           source,
           action.type,
           action.phone,
@@ -288,6 +310,41 @@ export class ToolExecutor {
     return {
       message: `Recorded ${displayName}'s pledge of ${amount.toString()}.`,
       data: pledge,
+    };
+  }
+
+  /**
+   * A pledge and its first payment together, atomically — see
+   * FulfillmentService.recordPledgeWithPayment. Never resolve this as two
+   * separate record_pledge + record_payment actions in the same turn.
+   */
+  async recordPledgeWithPayment(
+    ctx: OperationContext,
+    personId: string | undefined,
+    displayName: string,
+    committedValue: bigint,
+    receivedNow: bigint,
+    source: ProvenanceSource,
+    type?: PledgeType,
+    phone?: string,
+  ): Promise<ExecutionResult> {
+    let targetPersonId = personId;
+    if (!targetPersonId) {
+      const person = await this.people.createPerson(ctx, { displayName, phone, source });
+      targetPersonId = person.id;
+    }
+    const result = await this.fulfillments.recordPledgeWithPayment(ctx, {
+      personId: targetPersonId,
+      committedValue,
+      receivedNow,
+      type,
+      source,
+    });
+    return {
+      message:
+        `Recorded ${displayName}'s pledge of ${committedValue.toString()}, ` +
+        `with ${receivedNow.toString()} already received. Outstanding: ${result.outstanding}.`,
+      data: result,
     };
   }
 

@@ -1073,6 +1073,20 @@ export class CaptureService {
     const person = await this.resolver.resolvePerson(ctx.event.eventId, name);
     if (person.status === 'none') {
       if (call.tool === 'record_pledge') {
+        const receivedNow = call.args.receivedNow;
+        if (receivedNow && BigInt(receivedNow) > 0n) {
+          return {
+            type: 'action',
+            action: {
+              tool: 'record_pledge_with_payment',
+              displayName: name,
+              amount: call.args.amount,
+              receivedNow,
+              type: call.args.type as PledgeType | undefined,
+            },
+            prompt: `Add ${name} as a contributor, record their pledge of ${call.args.amount}, and ${receivedNow} already received?`,
+          };
+        }
         return {
           type: 'action',
           action: {
@@ -1099,6 +1113,21 @@ export class CaptureService {
     }
 
     if (call.tool === 'record_pledge') {
+      const receivedNow = call.args.receivedNow;
+      if (receivedNow && BigInt(receivedNow) > 0n) {
+        return {
+          type: 'action',
+          action: {
+            tool: 'record_pledge_with_payment',
+            personId: person.personId,
+            displayName: person.displayName,
+            amount: call.args.amount,
+            receivedNow,
+            type: call.args.type as PledgeType | undefined,
+          },
+          prompt: `Record ${person.displayName}'s pledge of ${call.args.amount}, with ${receivedNow} already received?`,
+        };
+      }
       return {
         type: 'action',
         action: {

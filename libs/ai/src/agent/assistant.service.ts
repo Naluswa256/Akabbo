@@ -578,6 +578,15 @@ export class AssistantService {
       }
       args.amount = minor.toString();
     }
+    // Same normalisation for the optional "already received" amount on
+    // record_pledge (pledge + its first payment stated in one message).
+    if ('receivedNow' in args && args.receivedNow !== undefined && args.receivedNow !== null) {
+      const minor = parseAmountToMinorUnits(String(args.receivedNow));
+      if (minor === null) {
+        return json({ status: 'clarification', message: 'How much have they received so far?' });
+      }
+      args.receivedNow = minor.toString();
+    }
 
     const parsed = toolCallSchema.safeParse({ tool, args });
     if (!parsed.success) {

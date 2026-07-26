@@ -53,6 +53,20 @@ export interface RecordDirectContributionInput {
   source?: ProvenanceSource;
 }
 
+export interface RecordPledgeWithPaymentInput {
+  personId: string;
+  /** The full promised amount, e.g. "pledged 1,000,000". */
+  committedValue: bigint;
+  /** What's already been paid toward it, e.g. "...has paid 200,000 so far".
+   *  Omit or 0 for a plain pledge with no payment yet. */
+  receivedNow?: bigint;
+  type?: PledgeType;
+  method?: PaymentMethod;
+  note?: string;
+  idempotencyKey?: string;
+  source?: ProvenanceSource;
+}
+
 export interface FulfillmentView {
   id: string;
   pledgeId: string;
@@ -216,6 +230,89 @@ export class FulfillmentService {
         committedValue: pledge.committedValue,
         value: input.value,
         kind: input.kind,
+        method: input.method,
+        note: input.note,
+        idempotencyKey: input.idempotencyKey,
+        source,
+      });
+    });
+  }
+
+  /**
+   * A pledge AND an initial payment against it, together, atomically — for
+   * the extremely common single-utterance shape "X pledged 1M, has paid 200k
+   * so far". This exists specifically to avoid a real duplication bug: write
+   * tools are ALWAYS staged (never auto-committed), so if the AI instead
+   * called record_pledge and record_payment as two separate staged actions in
+   * the same turn, the payment's pledge-lookup would query the real `pledge`
+   * table before the pledge confirmation had landed, find nothing, and fall
+   * through to recordDirectContribution — creating a SECOND, disconnected
+   * pledge instead of one pledge with a partial payment. Doing both writes in
+   * one transaction removes the read-before-write race entirely: there is no
+   * intermediate state where the pledge exists but isn't visible yet.
+   */
+  async recordPledgeWithPayment(
+    ctx: OperationContext,
+    input: RecordPledgeWithPaymentInput,
+  ): Promise<FulfillmentView> {
+    this.permissions.assert(ctx.event.role, 'pledge:write');
+    assertEventWritable(ctx.event.status);
+    const pledgeEnt = await this.entitlements.check({ eventId: ctx.event.eventId }, 'create_pledge');
+    if (!pledgeEnt.allowed) {
+      throw new ForbiddenException(pledgeEnt.message ?? pledgeEnt.reason ?? 'Not entitled');
+    }
+
+    return this.tenant.runInEvent(ctx.event.eventId, async (tx) => {
+      const person = await tx.person.findFirst({
+        where: { id: input.personId },
+        select: { id: true },
+      });
+      if (!person) throw new NotFoundException('Person not found in this event');
+
+      const source = input.source ?? ProvenanceSource.human_typed;
+      const pledge = await tx.pledge.create({
+        data: {
+          eventId: ctx.event.eventId,
+          personId: input.personId,
+          type: input.type ?? PledgeType.CASH,
+          committedValue: input.committedValue,
+          status: PledgeStatus.PLEDGED, // recomputed below once the payment (if any) lands
+          source,
+          createdById: ctx.actor.userId,
+        },
+        select: { id: true, committedValue: true },
+      });
+
+      await this.audit.write(tx, {
+        eventId: ctx.event.eventId,
+        actorUserId: ctx.actor.userId,
+        action: 'pledge:create',
+        resourceType: 'pledge',
+        resourceId: pledge.id,
+        source,
+        newValue: { personId: input.personId, committedValue: moneyToString(pledge.committedValue) },
+      });
+
+      const receivedNow = input.receivedNow ?? 0n;
+      if (receivedNow <= 0n) {
+        // Plain pledge, nothing paid yet — same shape callers already expect
+        // from a fulfillment-less pledge (outstanding = the full amount).
+        return {
+          id: pledge.id,
+          pledgeId: pledge.id,
+          value: '0',
+          kind: FulfillmentKind.PAYMENT,
+          method: PaymentMethod.UNKNOWN,
+          verificationStatus: VerificationStatus.REPORTED,
+          pledgeStatus: PledgeStatus.PLEDGED,
+          outstanding: moneyToString(pledge.committedValue),
+        };
+      }
+
+      return this.writeFulfillment(tx, ctx, {
+        pledgeId: pledge.id,
+        committedValue: pledge.committedValue,
+        value: receivedNow,
         method: input.method,
         note: input.note,
         idempotencyKey: input.idempotencyKey,

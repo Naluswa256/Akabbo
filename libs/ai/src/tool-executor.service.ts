@@ -12,6 +12,7 @@ import {
 } from '@akabbo/ledger';
 import { SmsService } from '@akabbo/comms';
 import { formatAmount } from './amount';
+import { EntityResolver } from './entity-resolver.service';
 
 export interface ExecutionResult {
   /** Human-facing confirmation/answer, grounded in DB numbers (not the LLM). */
@@ -94,7 +95,32 @@ export class ToolExecutor {
     private readonly sms: SmsService,
     private readonly invitations: InvitationService,
     private readonly config: AppConfigService,
+    private readonly resolver: EntityResolver,
   ) {}
+
+  /**
+   * A StoredAction with no `personId` means the person didn't exist when it
+   * was STAGED. Several such actions can be staged in the same turn for the
+   * same brand-new contributor (e.g. the model calls add_person, then
+   * record_pledge, then record_payment as three separate tool calls instead
+   * of one record_pledge with receivedNow) — each was independently "not
+   * found" at staging time, since nothing is written to the DB until a human
+   * confirms. If we blindly created a person here, confirming all of them
+   * would create a DUPLICATE person per action. Re-resolve by name at
+   * CONFIRM time first, so the first-confirmed action's person is reused by
+   * the rest instead of forking into separate contributors.
+   */
+  private async resolveOrCreatePerson(
+    ctx: OperationContext,
+    displayName: string,
+    source: ProvenanceSource,
+    phone?: string,
+  ): Promise<string> {
+    const existing = await this.resolver.resolvePerson(ctx.event.eventId, displayName);
+    if (existing.status === 'resolved') return existing.personId;
+    const person = await this.people.createPerson(ctx, { displayName, phone, source });
+    return person.id;
+  }
 
   /** Dispatch a resolved action to the right typed call. */
   run(
@@ -300,11 +326,8 @@ export class ToolExecutor {
     type?: PledgeType,
     phone?: string,
   ): Promise<ExecutionResult> {
-    let targetPersonId = personId;
-    if (!targetPersonId) {
-      const person = await this.people.createPerson(ctx, { displayName, phone, source });
-      targetPersonId = person.id;
-    }
+    const targetPersonId =
+      personId ?? (await this.resolveOrCreatePerson(ctx, displayName, source, phone));
     const pledge = await this.pledges.createPledge(ctx, {
       personId: targetPersonId,
       committedValue: amount,
@@ -332,11 +355,8 @@ export class ToolExecutor {
     type?: PledgeType,
     phone?: string,
   ): Promise<ExecutionResult> {
-    let targetPersonId = personId;
-    if (!targetPersonId) {
-      const person = await this.people.createPerson(ctx, { displayName, phone, source });
-      targetPersonId = person.id;
-    }
+    const targetPersonId =
+      personId ?? (await this.resolveOrCreatePerson(ctx, displayName, source, phone));
     const result = await this.fulfillments.recordPledgeWithPayment(ctx, {
       personId: targetPersonId,
       committedValue,
@@ -381,6 +401,23 @@ export class ToolExecutor {
     source: ProvenanceSource,
     phone?: string,
   ): Promise<ExecutionResult> {
+    if (!personId) {
+      // Staged before the person existed — re-resolve now. If a pledge for
+      // them ALSO landed earlier in this same confirmation batch (e.g. the
+      // model split "pledged 1M, paid 200k" into separate add_person +
+      // record_pledge + record_payment calls instead of one record_pledge
+      // with receivedNow), this is really a PAYMENT against that pledge, not
+      // a second, disconnected direct contribution.
+      const resolvedPersonId = await this.resolveOrCreatePerson(ctx, displayName, source, phone);
+      const pledge = await this.resolver.resolvePledgeForPerson(
+        ctx.event.eventId,
+        resolvedPersonId,
+      );
+      if (pledge.status === 'resolved') {
+        return this.recordPayment(ctx, pledge.pledgeId, displayName, amount, source);
+      }
+      personId = resolvedPersonId;
+    }
     const f = await this.fulfillments.recordDirectContribution(ctx, {
       personId,
       displayName,

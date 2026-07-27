@@ -200,6 +200,12 @@ export class RecordDirectContributionDto {
   @Length(1, 1000)
   note?: string;
 
+  /** What an ITEM/SERVICE contribution actually is ("2 goats"). */
+  @IsOptional()
+  @IsString()
+  @Length(1, 500)
+  description?: string;
+
   @IsOptional()
   @IsString()
   @Length(8, 200)

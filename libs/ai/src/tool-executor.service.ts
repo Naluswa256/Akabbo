@@ -47,13 +47,17 @@ export type StoredAction =
       phone?: string;
     }
   | { tool: 'record_payment'; pledgeId: string; displayName: string; amount: string }
-  /** A gift with no prior pledge (§15) — creates the commitment and discharges it. */
+  /** A gift with no prior pledge (§15) — creates the commitment and discharges it.
+   *  CASH by default; ITEM/SERVICE for an in-kind gift ("gave 2 goats"), with
+   *  `description` saying what it is. */
   | {
       tool: 'record_direct_contribution';
       personId?: string;
       displayName: string;
       amount: string;
       phone?: string;
+      type?: PledgeType;
+      description?: string;
     }
   /** A budget line proposed by document extraction, promoted on confirmation. */
   | { tool: 'create_budget_item'; name: string; targetValue: string; sourceDocumentId?: string }
@@ -168,6 +172,8 @@ export class ToolExecutor {
           BigInt(action.amount),
           source,
           action.phone,
+          action.type,
+          action.description,
         );
       case 'create_budget_item':
         return this.createBudgetItem(
@@ -400,6 +406,8 @@ export class ToolExecutor {
     amount: bigint,
     source: ProvenanceSource,
     phone?: string,
+    type?: PledgeType,
+    description?: string,
   ): Promise<ExecutionResult> {
     if (!personId) {
       // Staged before the person existed — re-resolve now. If a pledge for
@@ -424,9 +432,13 @@ export class ToolExecutor {
       phone,
       value: amount,
       source,
+      type,
+      description,
+      kind: type && type !== 'CASH' ? 'DELIVERY' : undefined,
     });
+    const what = description ? ` (${description})` : '';
     return {
-      message: `Recorded ${displayName}'s contribution of ${formatAmount(amount)}.`,
+      message: `Recorded ${displayName}'s contribution of ${formatAmount(amount)}${what}.`,
       data: f,
     };
   }

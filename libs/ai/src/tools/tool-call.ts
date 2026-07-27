@@ -33,6 +33,13 @@ export const recordPledgeArgs = z.object({
 export const recordPaymentArgs = z.object({
   personName: z.string().min(1),
   amount: amountString,
+  /** Optional — only meaningful when this turns out to have no existing
+   *  pledge (a direct contribution): CASH/ITEM/SERVICE, mirroring
+   *  record_pledge's `type`, so an in-kind gift ("gave 2 goats") isn't
+   *  forced to look like a cash amount. */
+  type: z.enum(['CASH', 'ITEM', 'SERVICE']).optional(),
+  /** What the item/service actually is, for ITEM/SERVICE contributions. */
+  description: z.string().min(1).max(500).optional(),
 });
 
 export const getOutstandingArgs = z.object({
@@ -102,12 +109,17 @@ export const LLM_TOOL_SPECS = [
   },
   {
     name: 'record_payment',
-    description: "Record a payment that discharges a named person's pledge.",
+    description:
+      "Record a payment that discharges a named person's pledge. If the person has no " +
+      'existing pledge, this records a direct contribution instead — pass `type` ' +
+      "(ITEM/SERVICE) and `description` when it's an in-kind gift, not cash.",
     parameters: {
       type: 'object',
       properties: {
         personName: { type: 'string' },
         amount: { type: 'string', description: 'integer minor units, digits only' },
+        type: { type: 'string', enum: ['CASH', 'ITEM', 'SERVICE'] },
+        description: { type: 'string', description: 'What the item/service is, for ITEM/SERVICE.' },
       },
       required: ['personName', 'amount'],
     },

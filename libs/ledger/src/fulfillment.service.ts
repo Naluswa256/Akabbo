@@ -49,6 +49,9 @@ export interface RecordDirectContributionInput {
   method?: PaymentMethod;
   note?: string;
   type?: PledgeType;
+  /** What an ITEM/SERVICE contribution actually is ("2 goats") — mirrors
+   *  Pledge.description for in-kind pledges (§9.3). */
+  description?: string;
   idempotencyKey?: string;
   source?: ProvenanceSource;
 }
@@ -205,6 +208,7 @@ export class FulfillmentService {
           personId,
           type: input.type ?? PledgeType.CASH,
           committedValue: input.value,
+          description: input.description ?? null,
           status: PledgeStatus.PLEDGED, // recomputed to FULFILLED below
           isDirect: true,
           source,

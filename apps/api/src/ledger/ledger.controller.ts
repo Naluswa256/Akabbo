@@ -183,6 +183,7 @@ export class LedgerController {
       method: dto.method,
       type: dto.type,
       note: dto.note,
+      description: dto.description,
       idempotencyKey: dto.idempotencyKey,
     });
   }

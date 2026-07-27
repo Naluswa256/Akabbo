@@ -1104,6 +1104,8 @@ export class CaptureService {
           tool: 'record_direct_contribution',
           displayName: name,
           amount: call.args.amount,
+          type: call.args.type as PledgeType | undefined,
+          description: call.args.description,
         },
         prompt: `Add ${name} as a contributor and record their contribution of ${formatAmount(call.args.amount)}?`,
       };
@@ -1154,6 +1156,8 @@ export class CaptureService {
           personId: person.personId,
           displayName: person.displayName,
           amount: call.args.amount,
+          type: call.args.type as PledgeType | undefined,
+          description: call.args.description,
         },
         prompt: `Record ${person.displayName}'s contribution of ${formatAmount(call.args.amount)}?`,
       };

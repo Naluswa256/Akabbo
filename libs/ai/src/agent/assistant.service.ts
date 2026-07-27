@@ -1613,7 +1613,34 @@ const SYSTEM_PROMPT = [
   'Never present inference, estimate, or user statements as verified facts.',
   '',
   '============================================================',
-  '39. FINAL OPERATING PRINCIPLE',
+  '39. PROGRESS REPORT FORMAT',
+  '============================================================',
+  '',
+  'When the user asks for a "progress report", "contributor list", "who has paid", ' +
+    '"show me where we are", or a similar community-style update covering MULTIPLE ' +
+    'contributors (not a single named person\'s status), format it as a NUMBERED LIST — ' +
+    'this mirrors how Ugandan event mobilizers post reports (WhatsApp-style), which is ' +
+    'the format organizers already recognize:',
+  '',
+  '1. Full Name — UGX amount ✅',
+  '2. Full Name — UGX amount 🅿️',
+  '3. Full Name — UGX amount 🅿️ (UGX amount outstanding)',
+  '',
+  '✅ = fully paid (received covers the full pledge). ' +
+    '🅿️ = pledged but not fully received — nothing received yet, or add the outstanding ' +
+    'amount in parentheses when partially paid.',
+  '',
+  'After the numbered list, add ONE short summary line with the totals (received / ' +
+    'pledged / outstanding, and budget gap if relevant) — do not lead with a header block ' +
+    'like "Funding Overview" or split the answer into many labeled sections; the numbered ' +
+    'list IS the report.',
+  '',
+  'This numbered format is for MULTI-person reports only. A single named person\'s status ' +
+    '("how much has X paid") stays a plain sentence per §37 — do not wrap one person in a ' +
+    'numbered list.',
+  '',
+  '============================================================',
+  '40. FINAL OPERATING PRINCIPLE',
   '============================================================',
   '',
   'Think of Akabbo as an intelligent event operating system.',
@@ -1764,13 +1791,20 @@ export const AGENT_TOOL_SPECS: LlmToolSpec[] = [
   {
     name: 'record_pledge',
     description:
-      'Record a pledge (a promise to contribute) by a named person. Staged for confirmation.',
+      'Record a pledge (a promise to contribute) by a named person. Staged for confirmation. ' +
+      'If the SAME message also says how much they\'ve already paid (e.g. "pledged 1M, has paid 200k so far"), ' +
+      'ALWAYS pass that as `receivedNow` here too — never call record_payment separately in the same turn for a ' +
+      'pledge just created in this call, since it cannot see the pledge until this is confirmed.',
     parameters: {
       type: 'object',
       properties: {
         personName: { type: 'string' },
         amount: { type: 'string', description: 'UGX amount, e.g. "500000" or "500k"' },
         type: { type: 'string', enum: ['CASH', 'ITEM', 'SERVICE'] },
+        receivedNow: {
+          type: 'string',
+          description: 'Optional — amount already paid toward this pledge, e.g. "200000" or "200k".',
+        },
       },
       required: ['personName', 'amount'],
     },
@@ -1778,12 +1812,23 @@ export const AGENT_TOOL_SPECS: LlmToolSpec[] = [
   {
     name: 'record_payment',
     description:
-      "Record a payment that discharges a named person's pledge. Staged for confirmation.",
+      "Record a payment that discharges a named person's pledge. Staged for confirmation. " +
+      'If the person has no existing pledge, this becomes a direct contribution instead — ' +
+      "pass `type` (ITEM/SERVICE) and `description` when it's an in-kind gift (e.g. \"gave 2 " +
+      'goats"), not cash — never force an in-kind gift into `amount`.',
     parameters: {
       type: 'object',
       properties: {
         personName: { type: 'string' },
-        amount: { type: 'string', description: 'UGX amount, e.g. "200000" or "200k"' },
+        amount: {
+          type: 'string',
+          description: 'UGX amount, e.g. "200000" or "200k". Use "0" for a pure in-kind gift with no stated cash value.',
+        },
+        type: { type: 'string', enum: ['CASH', 'ITEM', 'SERVICE'] },
+        description: {
+          type: 'string',
+          description: 'What the item/service is, for ITEM/SERVICE contributions.',
+        },
       },
       required: ['personName', 'amount'],
     },

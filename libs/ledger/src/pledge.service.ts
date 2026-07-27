@@ -60,6 +60,12 @@ export interface PledgeWithSplitsView extends PledgeView {
   personPhone: string | null;
   outstanding: string;
   fulfillments: PledgeSplitView[];
+  /** In-kind detail (§9.3) — set when `type` is ITEM/SERVICE ("2 goats").
+   *  Always null for CASH. */
+  description: string | null;
+  quantity: number | null;
+  unit: string | null;
+  estimatedValue: string | null;
 }
 
 /**
@@ -207,6 +213,10 @@ export class PledgeService {
           committedValue: true,
           status: true,
           source: true,
+          description: true,
+          quantity: true,
+          unit: true,
+          estimatedValue: true,
           person: { select: { displayName: true, phone: true } },
           fulfillments: {
             orderBy: { occurredAt: 'asc' },
@@ -235,6 +245,10 @@ export class PledgeService {
           status: p.status,
           source: p.source,
           outstanding: moneyToString(outstanding(p.committedValue, totalFulfilled)),
+          description: p.description,
+          quantity: p.quantity,
+          unit: p.unit,
+          estimatedValue: p.estimatedValue === null ? null : moneyToString(p.estimatedValue),
           fulfillments: p.fulfillments.map((f) => ({
             id: f.id,
             value: moneyToString(f.value),

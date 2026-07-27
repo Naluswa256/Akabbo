@@ -34,6 +34,10 @@ Returns every pledge in the event, newest first, each with its person and full s
     "status": "PARTIALLY_FULFILLED",
     "source": "ai_from_chat",
     "outstanding": "800000",
+    "description": null,
+    "quantity": null,
+    "unit": null,
+    "estimatedValue": null,
     "fulfillments": [
       {
         "id": "f001...",
@@ -48,6 +52,8 @@ Returns every pledge in the event, newest first, each with its person and full s
   }
 ]
 ```
+
+`description`/`quantity`/`unit`/`estimatedValue` are only ever non-null when `type` is `ITEM` or `SERVICE` — see [FRONTEND_IN_KIND_CONTRIBUTIONS.md](FRONTEND_IN_KIND_CONTRIBUTIONS.md) for the full in-kind shape and how to render it.
 
 All money fields (`committedValue`, `outstanding`, each split's `value`) are **plain digit strings, integer minor units** (UGX has no minor units, so this is just the shillings amount) — format them for display yourself (thousands separators etc.), the API never adds formatting. No pagination yet — if an event has hundreds of pledges and this becomes slow, ask and we'll add `page`/`pageSize` matching the `report/contributors` endpoint's pattern.
 

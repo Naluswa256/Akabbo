@@ -468,6 +468,15 @@ export class AssistantService {
           );
         case 'remove_budget_item':
           return this.staged(await this.mutations.removeBudgetItem(ctx, String(args.name ?? '')));
+        case 'allocate_to_budget':
+          return this.staged(
+            await this.mutations.allocateToBudget(
+              ctx,
+              String(args.personName ?? ''),
+              String(args.budgetItemName ?? ''),
+              String(args.amount ?? ''),
+            ),
+          );
         case 'correct_pledge':
           return this.staged(
             await this.mutations.correctPledge(
@@ -1865,6 +1874,24 @@ export const AGENT_TOOL_SPECS: LlmToolSpec[] = [
       type: 'object',
       properties: { name: { type: 'string' } },
       required: ['name'],
+    },
+  },
+  {
+    name: 'allocate_to_budget',
+    description:
+      'Earmark (part of) a named person\'s payment against a budget line, e.g. "allocate John\'s payment to catering" ' +
+      'or "put 200k of Sarah\'s money toward the venue". This is what makes a budget item show as covered — for the ' +
+      "AI and the public page alike, since both read the live total. Picks the person's most recent payment that " +
+      'still has unallocated value; if none exists or the amount exceeds what\'s unallocated, you\'ll get a ' +
+      'clarification instead of a stage. Staged for confirmation.',
+    parameters: {
+      type: 'object',
+      properties: {
+        personName: { type: 'string', description: 'Whose payment to allocate from.' },
+        budgetItemName: { type: 'string', description: 'Existing budget item name.' },
+        amount: { type: 'string', description: 'UGX amount to allocate, e.g. "200000" or "200k".' },
+      },
+      required: ['personName', 'budgetItemName', 'amount'],
     },
   },
   {

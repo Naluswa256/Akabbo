@@ -341,6 +341,54 @@ export class AiMutationService {
     );
   }
 
+  /**
+   * "Allocate John's payment to catering" (§13). Earmarks (part of) a
+   * person's received payment against a budget line — this is what makes a
+   * budget item show as covered, for both the AI and the public page, since
+   * both read the same live allocation total. Never a bare flag: covered
+   * always means real money was tied to the item.
+   */
+  async allocateToBudget(
+    ctx: OperationContext,
+    personName: string,
+    budgetItemName: string,
+    amount: string,
+  ): Promise<StageResult> {
+    this.permissions.assert(ctx.event.role, 'budget:write');
+    const value = parseAmountToMinorUnits(amount);
+    if (value === null) return clarify('How much should be allocated?');
+    const item = await this.resolveBudgetItem(ctx, budgetItemName);
+    if (item.status !== 'one') return item.result;
+    const person = await this.resolver.resolvePerson(ctx.event.eventId, personName);
+    if (person.status === 'ambiguous') return ambiguous(person.candidates);
+    if (person.status !== 'resolved') return clarify(`I don't know anyone called ${personName}.`);
+    const fulfillment = await this.resolver.resolveUnallocatedFulfillmentForPerson(
+      ctx.event.eventId,
+      person.personId,
+    );
+    if (fulfillment.status !== 'resolved') {
+      return clarify(`${person.displayName} has no unallocated payment to earmark.`);
+    }
+    if (value > fulfillment.unallocated) {
+      return clarify(
+        `${person.displayName} only has ${formatAmount(fulfillment.unallocated)} unallocated — ` +
+          `not enough to cover ${formatAmount(value)}.`,
+      );
+    }
+    return this.stage(
+      ctx,
+      {
+        tool: 'allocate_to_budget',
+        fulfillmentId: fulfillment.fulfillmentId,
+        budgetItemId: item.id,
+        budgetItemName: item.name,
+        displayName: person.displayName,
+        value: value.toString(),
+      },
+      `Allocate ${formatAmount(value)} from ${person.displayName}'s payment to "${item.name}"?`,
+    );
+  }
+
   // ── Corrections ──────────────────────────────────────────────────────────────
 
   async correctPledge(

@@ -21,6 +21,10 @@ export type PledgeResolution =
   | { status: 'ambiguous'; candidates: PledgeCandidate[] }
   | { status: 'none' };
 
+export type FulfillmentResolution =
+  | { status: 'resolved'; fulfillmentId: string; unallocated: bigint }
+  | { status: 'none' };
+
 /**
  * Resolves a person NAME to a person_id within ONE event (CLAUDE.md §4:
  * "Entity resolution is scoped to the event"). Ambiguity ("which John?")
@@ -78,6 +82,32 @@ export class EntityResolver {
           committedValue: p.committedValue.toString(),
         })),
       };
+    });
+  }
+
+  /**
+   * Which of a person's payments has money left to earmark against a budget
+   * item (§13 allocation). Picks the most recent payment with unallocated
+   * value remaining — "allocate the payment we just talked about" is the
+   * overwhelmingly common chat pattern, so we auto-pick rather than forcing a
+   * disambiguation round-trip for what is usually obvious from context.
+   */
+  resolveUnallocatedFulfillmentForPerson(
+    eventId: string,
+    personId: string,
+  ): Promise<FulfillmentResolution> {
+    return this.tenant.runInEvent(eventId, async (tx) => {
+      const rows = await tx.$queryRaw<{ id: string; unallocated: bigint }[]>`
+        SELECT f.id,
+               (f.value - COALESCE((SELECT SUM(a.value) FROM allocation a WHERE a.fulfillment_id = f.id), 0))::bigint AS unallocated
+        FROM fulfillment f
+        JOIN pledge pl ON f.pledge_id = pl.id
+        WHERE pl.person_id = ${personId}::uuid AND pl.status <> 'CANCELLED'
+        ORDER BY f.occurred_at DESC
+      `;
+      const candidate = rows.find((r) => r.unallocated > 0n);
+      if (!candidate) return { status: 'none' };
+      return { status: 'resolved', fulfillmentId: candidate.id, unallocated: candidate.unallocated };
     });
   }
 }

@@ -3,6 +3,7 @@ import { EventRole, PledgeType, ProvenanceSource } from '@prisma/client';
 import { OperationContext } from '@akabbo/access';
 import { AppConfigService } from '@akabbo/config';
 import {
+  AllocationService,
   BudgetService,
   FulfillmentService,
   InvitationService,
@@ -63,6 +64,16 @@ export type StoredAction =
   | { tool: 'create_budget_item'; name: string; targetValue: string; sourceDocumentId?: string }
   | { tool: 'update_budget_item'; itemId: string; name: string; targetValue: string }
   | { tool: 'remove_budget_item'; itemId: string; name: string }
+  /** Earmark (part of) a person's payment against a budget line (§13) — what
+   *  makes an item show as covered, for the AI and the public page alike. */
+  | {
+      tool: 'allocate_to_budget';
+      fulfillmentId: string;
+      budgetItemId: string;
+      budgetItemName: string;
+      displayName: string;
+      value: string;
+    }
   | { tool: 'correct_pledge'; pledgeId: string; displayName: string; newValue: string }
   | { tool: 'correct_payment'; fulfillmentId: string; displayName: string; newValue: string }
   | {
@@ -100,6 +111,7 @@ export class ToolExecutor {
     private readonly invitations: InvitationService,
     private readonly config: AppConfigService,
     private readonly resolver: EntityResolver,
+    private readonly allocations: AllocationService,
   ) {}
 
   /**
@@ -187,6 +199,15 @@ export class ToolExecutor {
         return this.updateBudgetItem(ctx, action.itemId, action.name, BigInt(action.targetValue));
       case 'remove_budget_item':
         return this.removeBudgetItem(ctx, action.itemId);
+      case 'allocate_to_budget':
+        return this.allocateToBudget(
+          ctx,
+          action.fulfillmentId,
+          action.budgetItemId,
+          action.budgetItemName,
+          action.displayName,
+          BigInt(action.value),
+        );
       case 'correct_pledge':
         return this.correctPledge(
           ctx,
@@ -230,6 +251,21 @@ export class ToolExecutor {
   async removeBudgetItem(ctx: OperationContext, itemId: string): Promise<ExecutionResult> {
     const removed = await this.budget.removeItem(ctx, itemId);
     return { message: `Removed budget item "${removed.name}".`, data: removed };
+  }
+
+  async allocateToBudget(
+    ctx: OperationContext,
+    fulfillmentId: string,
+    budgetItemId: string,
+    budgetItemName: string,
+    displayName: string,
+    value: bigint,
+  ): Promise<ExecutionResult> {
+    const allocation = await this.allocations.allocate(ctx, fulfillmentId, budgetItemId, value);
+    return {
+      message: `Allocated ${formatAmount(value)} from ${displayName}'s payment to "${budgetItemName}".`,
+      data: allocation,
+    };
   }
 
   async correctPledge(

@@ -43,7 +43,7 @@ async function bootstrap(): Promise<void> {
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
     allowedHeaders:
-      'Content-Type, Accept, Authorization, X-Requested-With, x-muda-signature, x-akabbo-access-token',
+      'Content-Type, Accept, Authorization, X-Requested-With, x-muda-signature, x-akabbo-access-token, x-akabbo-admin-secret',
   });
 
   app.useLogger(app.get(PinoLogger));

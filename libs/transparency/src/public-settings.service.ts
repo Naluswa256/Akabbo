@@ -12,6 +12,11 @@ export interface PublicSettingsView {
   accessToken: string | null;
   contributorVisibility: ContributorVisibility;
   budgetVisibility: BudgetVisibility;
+  /** Show the overall fundraising target (and remaining/% covered, which
+   *  derive from it). Independent of budgetVisibility (the itemized budget). */
+  showTarget: boolean;
+  /** Show aggregate/per-contributor outstanding (amount-still-owed) figures. */
+  showOutstanding: boolean;
   description: string | null;
   revision: number;
 }
@@ -20,6 +25,8 @@ export interface UpdatePublicSettingsInput {
   isPublic?: boolean;
   contributorVisibility?: ContributorVisibility;
   budgetVisibility?: BudgetVisibility;
+  showTarget?: boolean;
+  showOutstanding?: boolean;
   description?: string | null;
 }
 
@@ -50,6 +57,8 @@ export class PublicSettingsService {
         publicAccessToken: true,
         contributorVisibility: true,
         budgetVisibility: true,
+        showTarget: true,
+        showOutstanding: true,
         description: true,
         publicRevision: true,
       },
@@ -70,6 +79,8 @@ export class PublicSettingsService {
           isPublic: true,
           contributorVisibility: true,
           budgetVisibility: true,
+          showTarget: true,
+          showOutstanding: true,
           description: true,
         },
       });
@@ -80,6 +91,8 @@ export class PublicSettingsService {
           isPublic: input.isPublic ?? before.isPublic,
           contributorVisibility: input.contributorVisibility ?? before.contributorVisibility,
           budgetVisibility: input.budgetVisibility ?? before.budgetVisibility,
+          showTarget: input.showTarget ?? before.showTarget,
+          showOutstanding: input.showOutstanding ?? before.showOutstanding,
           description: input.description === undefined ? before.description : input.description,
           publicRevision: { increment: 1 },
         },
@@ -89,6 +102,8 @@ export class PublicSettingsService {
           publicAccessToken: true,
           contributorVisibility: true,
           budgetVisibility: true,
+          showTarget: true,
+          showOutstanding: true,
           description: true,
           publicRevision: true,
         },
@@ -104,11 +119,15 @@ export class PublicSettingsService {
           isPublic: before.isPublic,
           contributorVisibility: before.contributorVisibility,
           budgetVisibility: before.budgetVisibility,
+          showTarget: before.showTarget,
+          showOutstanding: before.showOutstanding,
         },
         newValue: {
           isPublic: updated.isPublic,
           contributorVisibility: updated.contributorVisibility,
           budgetVisibility: updated.budgetVisibility,
+          showTarget: updated.showTarget,
+          showOutstanding: updated.showOutstanding,
         },
       });
 
@@ -144,6 +163,8 @@ export class PublicSettingsService {
           publicAccessToken: true,
           contributorVisibility: true,
           budgetVisibility: true,
+          showTarget: true,
+          showOutstanding: true,
           description: true,
           publicRevision: true,
         },
@@ -167,6 +188,8 @@ export class PublicSettingsService {
     publicAccessToken: string | null;
     contributorVisibility: ContributorVisibility;
     budgetVisibility: BudgetVisibility;
+    showTarget: boolean;
+    showOutstanding: boolean;
     description: string | null;
     publicRevision: number;
   }): PublicSettingsView {
@@ -176,6 +199,8 @@ export class PublicSettingsService {
       accessToken: e.publicAccessToken,
       contributorVisibility: e.contributorVisibility,
       budgetVisibility: e.budgetVisibility,
+      showTarget: e.showTarget,
+      showOutstanding: e.showOutstanding,
       description: e.description,
       revision: e.publicRevision,
     };

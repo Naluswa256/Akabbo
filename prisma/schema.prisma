@@ -374,6 +374,14 @@ model Event {
   contributorVisibility ContributorVisibility @default(NAMES_AND_AMOUNTS) @map("contributor_visibility")
   /// Whether/how the public page shows the budget (Part 4/16).
   budgetVisibility      BudgetVisibility      @default(PUBLIC) @map("budget_visibility")
+  /// Whether the public page shows the overall fundraising target (and the
+  /// figures derived from it: remaining, % covered). Independent of
+  /// budgetVisibility, which governs the itemized budget breakdown only.
+  showTarget            Boolean               @default(true) @map("show_target")
+  /// Whether the public page shows aggregate/per-contributor outstanding
+  /// (amount-still-owed) figures. Some organizers don't want contributors to
+  /// see how far behind the event is, even while showing what's been received.
+  showOutstanding       Boolean               @default(true) @map("show_outstanding")
   /// Bumped on public-settings changes so caches/ETags invalidate deterministically.
   publicRevision        Int                   @default(1) @map("public_revision")
 

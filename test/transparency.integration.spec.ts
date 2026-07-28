@@ -146,7 +146,7 @@ describe('Phase 5 — public transparency (integration)', () => {
     expect(v.contributorCount).toBe(2); // Peter didn't pledge
 
     // Internal consistency: pledged − received == outstanding; target − received == remaining.
-    expect(BigInt(v.totalPledged) - BigInt(v.totalReceived)).toBe(BigInt(v.totalOutstanding));
+    expect(BigInt(v.totalPledged) - BigInt(v.totalReceived)).toBe(BigInt(v.totalOutstanding!));
     expect(BigInt(v.target!) - BigInt(v.totalReceived)).toBe(BigInt(v.remaining!));
   });
 

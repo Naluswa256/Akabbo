@@ -165,6 +165,13 @@ POST /events/evt_123/invitations/inv_9f1c/revoke   → { "ok": true }
 
 ## 3. PUBLIC VIEWS (unauthenticated transparency)
 
+> **⚠️ Changed 2026-07-28 — 3 breaking-ish changes to `PublicEventView`, none require a migration but ALL require a code change on your side:**
+> 1. **`target`, `totalOutstanding`, `remaining`, `percentCovered` are now nullable.** They used to be unconditionally present whenever the event was public; they can now be `null` when the organizer has hidden them (new `showTarget`/`showOutstanding` settings, §3.4). **Any code that assumes these are always a string/number will break** — add null checks.
+> 2. **Each contributor now carries `pledges[]`** — the individual pledge(s) + payment entries behind their `committed`/`received` totals (§3.1 example below). This is additive — existing fields (`displayName`, `committed`, `received`, `outstanding`, `status`) are unchanged.
+> 3. **`visibility` gained two fields**: `showTarget`, `showOutstanding` (booleans), alongside the existing `contributors`/`budget`.
+>
+> Nothing about `contributorVisibility`/`budgetVisibility` semantics changed — this is a new, independent pair of toggles layered on top.
+
 The contributor-facing site. **No auth, no account, no AI.** Everything resolves a public **slug** (+ optional `?t=` token for invite-only events). This is a deliberate projection — it can never expose person ids, phones, notes, audit rows, AI history, or internals.
 
 ### 3.1 Full event view
@@ -202,9 +209,33 @@ GET /public/events/william-sarah-wedding-1a2b3c4d
     ]
   },
   "contributors": [
-    { "displayName": "John Kato",    "committed": "5000000", "received": "5000000", "outstanding": "0",       "status": "FULLY_PAID" },
-    { "displayName": "Annet Nakato", "committed": "2000000", "received": "1000000", "outstanding": "1000000", "status": "PARTIALLY_PAID" },
-    { "displayName": "Peter Ssali",  "committed": "1000000", "received": "0",       "outstanding": "1000000", "status": "PLEDGED" }
+    {
+      "displayName": "John Kato", "committed": "5000000", "received": "5000000", "outstanding": "0", "status": "FULLY_PAID",
+      "pledges": [
+        {
+          "type": "CASH", "committedValue": "5000000", "description": null, "status": "FULLY_PAID", "outstanding": "0",
+          "payments": [
+            { "value": "3000000", "kind": "PAYMENT", "occurredAt": "2026-07-10T09:00:00.000Z" },
+            { "value": "2000000", "kind": "PAYMENT", "occurredAt": "2026-07-18T11:30:00.000Z" }
+          ]
+        }
+      ]
+    },
+    {
+      "displayName": "Annet Nakato", "committed": "2000000", "received": "1000000", "outstanding": "1000000", "status": "PARTIALLY_PAID",
+      "pledges": [
+        {
+          "type": "CASH", "committedValue": "2000000", "description": null, "status": "PARTIALLY_PAID", "outstanding": "1000000",
+          "payments": [ { "value": "1000000", "kind": "PAYMENT", "occurredAt": "2026-07-20T14:03:00.000Z" } ]
+        }
+      ]
+    },
+    {
+      "displayName": "Peter Ssali", "committed": "1000000", "received": "0", "outstanding": "1000000", "status": "PLEDGED",
+      "pledges": [
+        { "type": "CASH", "committedValue": "1000000", "description": null, "status": "PLEDGED", "outstanding": "1000000", "payments": [] }
+      ]
+    }
   ],
   "recentActivity": [
     { "displayName": "John Kato", "value": "2000000", "occurredAt": "2026-07-20T14:03:00.000Z" }
@@ -217,16 +248,18 @@ GET /public/events/william-sarah-wedding-1a2b3c4d
     { "method": "AIRTEL","label": "Airtel Money", "details": "0701 234 567 (Sarah)" }
   ],
   "revision": 37,
-  "visibility": { "contributors": "NAMES_AND_AMOUNTS", "budget": "PUBLIC" }
+  "visibility": { "contributors": "NAMES_AND_AMOUNTS", "budget": "PUBLIC", "showTarget": true, "showOutstanding": true }
 }
 ```
+
+**Per-contributor pledge/payment breakdown (new):** each contributor at `NAMES_AND_AMOUNTS` now carries `pledges[]` — one entry per pledge they have (usually one, but a person can pledge more than once), each with its own `payments[]` — the individual splits recorded against it. This is the "pledge 1M, then below it, the entries of payments made against it" view. `payments[].kind` is `PAYMENT` (cash) or `DELIVERY` (an in-kind split); `pledges[].description` is set only for `ITEM`/`SERVICE` pledges.
 
 **Visibility gating — sections become `null`, and `visibility` tells you why.** Handle every case:
 
 | `visibility.contributors` | `contributorCount` | `contributors` | `recentActivity` |
 |---|---|---|---|
-| `NAMES_AND_AMOUNTS` | number | full objects (with amounts + `status`) | up to 10 recent |
-| `NAMES_ONLY` | number | `[{ displayName }]` only (no amounts) | `null` |
+| `NAMES_AND_AMOUNTS` | number | full objects (amounts + `status` + `pledges[]`) | up to 10 recent |
+| `NAMES_ONLY` | number | `[{ displayName }]` only (no amounts, no pledges) | `null` |
 | `AGGREGATE_ONLY` | number | `null` | `null` |
 | `HIDDEN` | `null` | `null` | `null` |
 
@@ -236,9 +269,16 @@ GET /public/events/william-sarah-wedding-1a2b3c4d
 | `PARTIALLY_PUBLIC` | breakdown, but only items the organizer flagged public |
 | `HIDDEN` | `null` |
 
-The **five financial totals** (`target`, `totalPledged`, `totalReceived`, `totalOutstanding`, `remaining`) + `percentCovered` are **always present** when the event is public — they're computed in one transaction so they never contradict. `target`/`remaining` are `null` only when no target is set.
+**`showTarget`/`showOutstanding` (new) — independent of the two tables above.** Some organizers don't want contributors to see how far behind the event is, even while showing what's been raised:
 
-`PaymentMethod` enum: `MTN | AIRTEL | CASH | BANK | OTHER | UNKNOWN`.
+| Flag | `false` → these become `null`/omitted |
+|---|---|
+| `showTarget` | top-level `target`, `remaining`, `percentCovered` |
+| `showOutstanding` | top-level `totalOutstanding`; every contributor's `outstanding`; every `pledges[].outstanding` |
+
+`totalPledged`/`totalReceived` and every `committed`/`received`/`payments[]` value are **never** gated by these two flags — only outstanding/target figures are. `totalPledged`, `totalReceived` are always present strings when the event is public; `target`, `totalOutstanding`, `remaining`, `percentCovered` are all `string | number | null` — always check for `null` rather than assuming presence (previously these five were unconditionally present; that's no longer true).
+
+`PaymentMethod` enum: `MTN | AIRTEL | CASH | BANK | OTHER | UNKNOWN`. `FulfillmentKind` (payment entry `kind`): `PAYMENT | DELIVERY`.
 
 ### 3.2 Lighter slices (same auth rules, cheaper)
 ```http
@@ -268,7 +308,7 @@ GET /public/events/:slug/contribute      → { paymentInstructions: PublicPaymen
 ### 3.4 Organizer control plane (authenticated) — what drives the public page
 ```http
 GET   /events/:id/public/settings
-PATCH /events/:id/public/settings      { isPublic?, contributorVisibility?, budgetVisibility? }
+PATCH /events/:id/public/settings      { isPublic?, contributorVisibility?, budgetVisibility?, showTarget?, showOutstanding?, description? }
 POST  /events/:id/public/token/rotate   ← makes it invite-only / rotates the token
 DELETE /events/:id/public/token         ← makes it openly public (no token)
 
@@ -280,6 +320,34 @@ POST /events/:id/announcements/:id/archive
 GET/POST/PATCH/DELETE /events/:id/payment-instructions
 ```
 The AI can also **draft** and **publish** announcements (draft executes immediately; publish is staged — see main contract §5).
+
+**`showTarget`/`showOutstanding` (new)** — this is where the "hide budget target / amount outstanding from contributors" toggle for the public-link creation/settings screen lives. Both default `true` (existing behavior — nothing changes unless the organizer explicitly turns one off). Example:
+
+```http
+GET /events/evt_123/public/settings
+```
+```json
+{
+  "slug": "william-sarah-wedding-1a2b3c4d",
+  "isPublic": true,
+  "accessToken": null,
+  "contributorVisibility": "NAMES_AND_AMOUNTS",
+  "budgetVisibility": "PUBLIC",
+  "showTarget": true,
+  "showOutstanding": true,
+  "description": "Help us celebrate on 12 December.",
+  "revision": 37
+}
+```
+
+To hide just the target/outstanding figures (contributors still see names + what's been received, just not the target or how far short anyone/the event is):
+```http
+PATCH /events/evt_123/public/settings
+Content-Type: application/json
+
+{ "showTarget": false, "showOutstanding": false }
+```
+Send only the field(s) changing — this is a partial update, same as `contributorVisibility`/`budgetVisibility` already work. The response is the full updated `PublicSettingsView` (same shape as the GET above), and `revision` bumps — the public page's `visibility.showTarget`/`visibility.showOutstanding` (§3.1) will reflect it on next fetch.
 
 ---
 

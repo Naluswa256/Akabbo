@@ -19,6 +19,7 @@ import {
   PublicBudgetItem,
   PublicContributor,
   PublicEventView,
+  PublicPledgeEntry,
 } from './public-view';
 
 /** Percentage of target received, one decimal; null when no usable target. */
@@ -45,6 +46,8 @@ interface ResolvedEvent {
   targetAmount: bigint | null;
   contributorVisibility: ContributorVisibility;
   budgetVisibility: BudgetVisibility;
+  showTarget: boolean;
+  showOutstanding: boolean;
   publicRevision: number;
 }
 
@@ -96,6 +99,8 @@ export class PublicViewService {
         publicAccessToken: true,
         contributorVisibility: true,
         budgetVisibility: true,
+        showTarget: true,
+        showOutstanding: true,
         publicRevision: true,
       },
     });
@@ -118,6 +123,8 @@ export class PublicViewService {
           publicAccessToken: true,
           contributorVisibility: true,
           budgetVisibility: true,
+          showTarget: true,
+          showOutstanding: true,
           publicRevision: true,
         },
       });
@@ -142,6 +149,8 @@ export class PublicViewService {
       targetAmount: event.targetAmount,
       contributorVisibility: event.contributorVisibility,
       budgetVisibility: event.budgetVisibility,
+      showTarget: event.showTarget,
+      showOutstanding: event.showOutstanding,
       publicRevision: event.publicRevision,
     };
   }
@@ -164,9 +173,10 @@ export class PublicViewService {
 
       // ── Per-person rollup (drives count, list, activity). ────────────────────
       const people = await tx.$queryRaw<
-        { display_name: string; committed: bigint; received: bigint }[]
+        { id: string; display_name: string; committed: bigint; received: bigint }[]
       >`
-        SELECT p.display_name,
+        SELECT p.id,
+               p.display_name,
                COALESCE((SELECT SUM(pl.committed_value) FROM pledge pl
                           WHERE pl.person_id = p.id AND pl.status <> 'CANCELLED'), 0)::bigint AS committed,
                COALESCE((SELECT SUM(f.value) FROM fulfillment f
@@ -178,7 +188,7 @@ export class PublicViewService {
 
       const vis = event.contributorVisibility;
       const showCount = vis !== ContributorVisibility.HIDDEN;
-      const contributors = this.buildContributors(people, vis);
+      const contributors = await this.buildContributors(tx, people, vis, event.showOutstanding);
       const recentActivity =
         vis === ContributorVisibility.NAMES_AND_AMOUNTS ? await this.buildRecentActivity(tx) : null;
 
@@ -203,12 +213,14 @@ export class PublicViewService {
         eventDate: event.eventDate ? event.eventDate.toISOString() : null,
         status: event.status,
         currency: event.currency,
-        target: target === null ? null : moneyToString(target),
+        target: event.showTarget && target !== null ? moneyToString(target) : null,
         totalPledged: moneyToString(totalPledged),
         totalReceived: moneyToString(totalReceived),
-        totalOutstanding: moneyToString(outstanding(totalPledged, totalReceived)),
-        remaining: remaining === null ? null : moneyToString(remaining),
-        percentCovered: percentCovered(totalReceived, target),
+        totalOutstanding: event.showOutstanding
+          ? moneyToString(outstanding(totalPledged, totalReceived))
+          : null,
+        remaining: event.showTarget && remaining !== null ? moneyToString(remaining) : null,
+        percentCovered: event.showTarget ? percentCovered(totalReceived, target) : null,
         contributorCount: showCount ? contributorCount : null,
         budget,
         contributors,
@@ -223,15 +235,22 @@ export class PublicViewService {
           details: p.details,
         })),
         revision: event.publicRevision,
-        visibility: { contributors: vis, budget: event.budgetVisibility },
+        visibility: {
+          contributors: vis,
+          budget: event.budgetVisibility,
+          showTarget: event.showTarget,
+          showOutstanding: event.showOutstanding,
+        },
       };
     });
   }
 
-  private buildContributors(
-    people: { display_name: string; committed: bigint; received: bigint }[],
+  private async buildContributors(
+    tx: TenantTx,
+    people: { id: string; display_name: string; committed: bigint; received: bigint }[],
     vis: ContributorVisibility,
-  ): PublicContributor[] | null {
+    showOutstanding: boolean,
+  ): Promise<PublicContributor[] | null> {
     if (vis === ContributorVisibility.AGGREGATE_ONLY || vis === ContributorVisibility.HIDDEN) {
       return null;
     }
@@ -244,14 +263,69 @@ export class PublicViewService {
     if (vis === ContributorVisibility.NAMES_ONLY) {
       return rows.map((r) => ({ displayName: r.display_name }));
     }
-    // NAMES_AND_AMOUNTS
+    // NAMES_AND_AMOUNTS — includes each contributor's pledge + payment breakdown.
+    const pledgesByPerson = await this.buildPledgeBreakdown(
+      tx,
+      rows.map((r) => r.id),
+      showOutstanding,
+    );
     return rows.map((r) => ({
       displayName: r.display_name,
       committed: moneyToString(r.committed),
       received: moneyToString(r.received),
-      outstanding: moneyToString(outstanding(r.committed, r.received)),
+      ...(showOutstanding ? { outstanding: moneyToString(outstanding(r.committed, r.received)) } : {}),
       status: contributorStatus(r.committed, r.received),
+      pledges: pledgesByPerson.get(r.id) ?? [],
     }));
+  }
+
+  /** Per-person pledges with their payment entries — "pledge 1M, then below
+   *  it, the entries of payments made against it." Only fetched for the
+   *  contributors actually being shown (already filtered/sliced). */
+  private async buildPledgeBreakdown(
+    tx: TenantTx,
+    personIds: string[],
+    showOutstanding: boolean,
+  ): Promise<Map<string, PublicPledgeEntry[]>> {
+    const map = new Map<string, PublicPledgeEntry[]>();
+    if (personIds.length === 0) return map;
+
+    const pledges = await tx.pledge.findMany({
+      where: { personId: { in: personIds }, status: { not: PledgeStatus.CANCELLED } },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        personId: true,
+        type: true,
+        committedValue: true,
+        description: true,
+        fulfillments: {
+          orderBy: { occurredAt: 'asc' },
+          select: { value: true, kind: true, occurredAt: true },
+        },
+      },
+    });
+
+    for (const p of pledges) {
+      const totalFulfilled = p.fulfillments.reduce((sum, f) => sum + f.value, 0n);
+      const entry: PublicPledgeEntry = {
+        type: p.type,
+        committedValue: moneyToString(p.committedValue),
+        description: p.description,
+        status: contributorStatus(p.committedValue, totalFulfilled),
+        ...(showOutstanding
+          ? { outstanding: moneyToString(outstanding(p.committedValue, totalFulfilled)) }
+          : {}),
+        payments: p.fulfillments.map((f) => ({
+          value: moneyToString(f.value),
+          kind: f.kind,
+          occurredAt: f.occurredAt.toISOString(),
+        })),
+      };
+      const existing = map.get(p.personId);
+      if (existing) existing.push(entry);
+      else map.set(p.personId, [entry]);
+    }
+    return map;
   }
 
   private async buildRecentActivity(tx: TenantTx): Promise<PublicActivityEntry[]> {

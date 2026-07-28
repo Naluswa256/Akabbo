@@ -2,7 +2,9 @@ import {
   BudgetVisibility,
   ContributorVisibility,
   EventStatus,
+  FulfillmentKind,
   PaymentMethod,
+  PledgeType,
 } from '@prisma/client';
 
 /**
@@ -19,6 +21,28 @@ import {
 export type ContributorStatus = 'FULLY_PAID' | 'PARTIALLY_PAID' | 'PLEDGED';
 export type BudgetItemStatus = 'FUNDED' | 'PARTIALLY_FUNDED' | 'UNFUNDED';
 
+/** One payment/split entry within a pledge — "pledge 1M, then below it, the
+ *  entries of payments made against it." */
+export interface PublicPledgePayment {
+  value: string;
+  kind: FulfillmentKind;
+  /** ISO-8601. */
+  occurredAt: string;
+}
+
+/** A single pledge and its payment history. A contributor can have more than
+ *  one pledge (e.g. pledged again later) — each is its own entry. */
+export interface PublicPledgeEntry {
+  type: PledgeType;
+  committedValue: string;
+  /** In-kind detail ("2 goats") — set only for ITEM/SERVICE. */
+  description: string | null;
+  status: ContributorStatus;
+  /** Omitted (undefined) when the organizer has hidden outstanding figures. */
+  outstanding?: string;
+  payments: PublicPledgePayment[];
+}
+
 export interface PublicContributor {
   displayName: string;
   /** Amounts are omitted when visibility is NAMES_ONLY. */
@@ -26,6 +50,9 @@ export interface PublicContributor {
   received?: string;
   outstanding?: string;
   status?: ContributorStatus;
+  /** Per-pledge breakdown with payment entries — same visibility tier as
+   *  committed/received (NAMES_AND_AMOUNTS). Omitted otherwise. */
+  pledges?: PublicPledgeEntry[];
 }
 
 export interface PublicBudgetItem {
@@ -71,13 +98,15 @@ export interface PublicEventView {
   status: EventStatus;
   currency: string;
 
-  // ── Financial totals — ALWAYS present when the event is public (Part 3). ────
-  /** These five never contradict: computed in ONE transaction (Part 28). */
+  // ── Financial totals — computed in ONE transaction so they never contradict
+  //    each other (Part 28). target/remaining/percentCovered are null when the
+  //    organizer has turned showTarget off; totalOutstanding is null when
+  //    showOutstanding is off. totalPledged/totalReceived are always present. ─
   target: string | null;
   totalPledged: string;
   totalReceived: string;
-  totalOutstanding: string;
-  /** target − received, or null when no target is set. */
+  totalOutstanding: string | null;
+  /** target − received, or null when no target is set OR showTarget is off. */
   remaining: string | null;
   percentCovered: number | null;
 
@@ -101,5 +130,7 @@ export interface PublicEventView {
   visibility: {
     contributors: ContributorVisibility;
     budget: BudgetVisibility;
+    showTarget: boolean;
+    showOutstanding: boolean;
   };
 }

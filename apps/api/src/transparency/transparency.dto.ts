@@ -14,6 +14,18 @@ export class UpdatePublicSettingsDto {
   @IsEnum(BudgetVisibility)
   budgetVisibility?: BudgetVisibility;
 
+  /** Show the overall fundraising target (and remaining/% covered, which
+   *  derive from it) on the public page. */
+  @IsOptional()
+  @IsBoolean()
+  showTarget?: boolean;
+
+  /** Show aggregate/per-contributor outstanding (amount-still-owed) figures
+   *  on the public page. */
+  @IsOptional()
+  @IsBoolean()
+  showOutstanding?: boolean;
+
   @IsOptional()
   @IsString()
   @Length(0, 2000)

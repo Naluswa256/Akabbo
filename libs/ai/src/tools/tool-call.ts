@@ -17,6 +17,10 @@ export const addPersonArgs = z.object({
   /** Optional — captured when the user states it in the same breath, so the
    *  contributor is reachable by SMS from the moment they're added. */
   phone: z.string().min(1).max(20).optional(),
+  /** Only pass true when the user has explicitly confirmed this phone is a
+   *  genuinely shared/family number after being told it's already on file
+   *  for someone else — never set this pre-emptively. */
+  confirmSharedPhone: z.boolean().optional(),
 });
 
 export const recordPledgeArgs = z.object({
@@ -83,6 +87,10 @@ export const LLM_TOOL_SPECS = [
       properties: {
         displayName: { type: 'string' },
         phone: { type: 'string', description: 'Optional — capture it if the user states it.' },
+        confirmSharedPhone: {
+          type: 'boolean',
+          description: 'Only true if the user confirmed this phone is genuinely shared/family after being told it is already on file for someone else.',
+        },
       },
       required: ['displayName'],
     },

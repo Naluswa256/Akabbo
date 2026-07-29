@@ -33,6 +33,18 @@ Use `report`, **not** plain `/budget` — `/budget` only returns the planned lin
 }
 ```
 
+### 2a. The "All Items / Needs Money / Fully Paid" filter
+
+This is **client-side only** — every item already carries `status` in the one `/report` call above, so there's no separate filtered endpoint and no server round-trip per filter click. Map the 3-state `status` down to the 2 non-"All" filter options:
+
+| Filter option | Matches |
+|---|---|
+| **All Items** | everything, no filter |
+| **Needs Money** | `status === 'UNFUNDED' \|\| status === 'PARTIALLY_FUNDED'` — anything not yet fully covered |
+| **Fully Paid** | `status === 'FUNDED'` |
+
+Filter the `budget.items[]` array you already have in memory; don't re-fetch on filter change. If a future panel needs `PARTIALLY_FUNDED` broken out as its own third option (not just folded into "Needs Money"), that's still the same field — just a 3-way split instead of 2-way, no backend change either way.
+
 `report` also gives you the whole-event totals (pledged/received/outstanding) in the same call if the panel wants a header summary alongside the budget table — see the main payload doc's `/report` example.
 
 For editing (item ids, provenance, optimistic-lock version) rather than just display, use the plain list instead:

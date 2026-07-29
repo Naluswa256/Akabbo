@@ -1063,7 +1063,12 @@ export class CaptureService {
       const phoneNote = call.args.phone ? ` (${call.args.phone})` : '';
       return {
         type: 'action',
-        action: { tool: 'add_person', displayName: call.args.displayName, phone: call.args.phone },
+        action: {
+          tool: 'add_person',
+          displayName: call.args.displayName,
+          phone: call.args.phone,
+          confirmSharedPhone: call.args.confirmSharedPhone,
+        },
         prompt: `Add ${call.args.displayName}${phoneNote} as a contributor?`,
       };
     }

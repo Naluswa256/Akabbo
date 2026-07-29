@@ -11,12 +11,17 @@ import {
   PermissionService,
   assertEventWritable,
 } from '@akabbo/access';
-import { TenantContext } from './tenant-context.service';
+import { TenantContext, TenantTx } from './tenant-context.service';
 import { AuditWriter } from './audit.writer';
+import { PhoneAlreadyAttachedException } from './phone-duplicate.exception';
 
 export interface CreatePersonInput {
   displayName: string;
   phone?: string;
+  /** Attach the phone even though it's already on file for someone else in
+   *  this event (a real shared/family-number case) — see
+   *  PhoneAlreadyAttachedException. */
+  confirmSharedPhone?: boolean;
   /** Provenance of this record (§3.2). Defaults to human_typed (typed path);
    *  the AI capture path passes ai_from_chat. */
   source?: ProvenanceSource;
@@ -56,6 +61,9 @@ export class PersonService {
     if (!ent.allowed) throw new ForbiddenException(ent.message ?? ent.reason ?? 'Not entitled');
 
     return this.tenant.runInEvent(ctx.event.eventId, async (tx) => {
+      if (input.phone) {
+        await this.assertPhoneNotAttachedElsewhere(tx, input.phone, input.confirmSharedPhone);
+      }
       const source = input.source ?? ProvenanceSource.human_typed;
       const person = await tx.person.create({
         data: {
@@ -91,7 +99,12 @@ export class PersonService {
    * SMS reminders actually reachable — without a phone on file, a contributor
    * is silently excluded from every reminder/announcement blast.
    */
-  async updateContact(ctx: OperationContext, personId: string, phone: string): Promise<PersonView> {
+  async updateContact(
+    ctx: OperationContext,
+    personId: string,
+    phone: string,
+    confirmSharedPhone?: boolean,
+  ): Promise<PersonView> {
     this.permissions.assert(ctx.event.role, 'person:write');
     assertEventWritable(ctx.event.status);
 
@@ -101,6 +114,9 @@ export class PersonService {
         select: { phone: true },
       });
       if (!before) throw new NotFoundException('Person not found in this event');
+      if (phone !== before.phone) {
+        await this.assertPhoneNotAttachedElsewhere(tx, phone, confirmSharedPhone, personId);
+      }
 
       const updated = await tx.person.update({
         where: { id: personId },
@@ -121,6 +137,29 @@ export class PersonService {
 
       return updated;
     });
+  }
+
+  /**
+   * A phone shared across two people in the same event means SMS reminders/
+   * announcements land on one real phone addressed to whichever name got
+   * personalised into each message — confusing at best. Not a hard block (a
+   * shared/family number is a real case) — caller confirms to proceed anyway.
+   */
+  private async assertPhoneNotAttachedElsewhere(
+    tx: TenantTx,
+    phone: string,
+    confirmSharedPhone?: boolean,
+    excludePersonId?: string,
+  ): Promise<void> {
+    if (confirmSharedPhone) return;
+    const existing = await tx.person.findFirst({
+      where: { phone, ...(excludePersonId ? { id: { not: excludePersonId } } : {}) },
+      select: { id: true, displayName: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (existing) {
+      throw new PhoneAlreadyAttachedException(existing.id, existing.displayName, phone);
+    }
   }
 
   /** List contributors in the event (read gate). */

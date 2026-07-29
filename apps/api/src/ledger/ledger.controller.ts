@@ -59,6 +59,7 @@ export class LedgerController {
     return this.people.createPerson(await this.ctx(actor, eventId), {
       displayName: dto.displayName,
       phone: dto.phone,
+      confirmSharedPhone: dto.confirmSharedPhone,
     });
   }
 

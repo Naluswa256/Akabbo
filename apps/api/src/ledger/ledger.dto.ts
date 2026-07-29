@@ -81,6 +81,12 @@ export class CreatePersonDto {
   @IsString()
   @Matches(/^\+\d{7,15}$/, { message: 'phone must be E.164' })
   phone?: string;
+
+  /** Attach the phone even though it's already on file for someone else in
+   *  this event (a genuine shared/family number). */
+  @IsOptional()
+  @IsBoolean()
+  confirmSharedPhone?: boolean;
 }
 
 export class CreatePledgeDto {

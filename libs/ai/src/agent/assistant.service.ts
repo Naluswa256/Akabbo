@@ -556,6 +556,7 @@ export class AssistantService {
               ctx,
               String(args.personName ?? ''),
               String(args.phone ?? ''),
+              Boolean(args.confirmSharedPhone),
             ),
           );
 
@@ -1718,7 +1719,8 @@ export const AGENT_TOOL_SPECS: LlmToolSpec[] = [
     name: 'add_person',
     description:
       'Add a CONTRIBUTOR — someone who pledges or gives money to the event. NOT for committee members or people who need to log in / manage the event (use invite_member for those). Staged for confirmation. ' +
-      'If the user states a phone number in the same message, ALWAYS pass it as `phone` — without it, this contributor cannot receive SMS reminders or announcements.',
+      'If the user states a phone number in the same message, ALWAYS pass it as `phone` — without it, this contributor cannot receive SMS reminders or announcements. ' +
+      "If confirming this stage fails because that phone is already on file for someone else, tell the user and only re-stage with `confirmSharedPhone: true` if they explicitly say it's a shared/family number — never assume it.",
     parameters: {
       type: 'object',
       properties: {
@@ -1726,6 +1728,10 @@ export const AGENT_TOOL_SPECS: LlmToolSpec[] = [
         phone: {
           type: 'string',
           description: "The contributor's phone number, if the user mentioned one.",
+        },
+        confirmSharedPhone: {
+          type: 'boolean',
+          description: 'Only true after the user explicitly confirms a phone flagged as already-in-use is genuinely shared.',
         },
       },
       required: ['displayName'],
@@ -1963,12 +1969,17 @@ export const AGENT_TOOL_SPECS: LlmToolSpec[] = [
     description:
       'Save or correct an EXISTING contributor\'s phone number — e.g. "Jesse\'s number is 07...", or when a contributor was added without one earlier. ' +
       'Use this whenever a phone number is mentioned for someone who already exists — never just acknowledge it in words, since nothing else persists it. ' +
-      'Without a phone on file, that contributor is silently excluded from every SMS reminder and announcement.',
+      'Without a phone on file, that contributor is silently excluded from every SMS reminder and announcement. ' +
+      "If this fails because the phone is already on file for someone else, tell the user and only retry with `confirmSharedPhone: true` if they explicitly say it's a shared/family number.",
     parameters: {
       type: 'object',
       properties: {
         personName: { type: 'string' },
         phone: { type: 'string' },
+        confirmSharedPhone: {
+          type: 'boolean',
+          description: 'Only true after the user explicitly confirms a phone flagged as already-in-use is genuinely shared.',
+        },
       },
       required: ['personName', 'phone'],
     },

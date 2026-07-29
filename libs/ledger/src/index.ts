@@ -5,6 +5,7 @@ export * from './outbox-drain.service';
 export * from './money';
 export * from './pledge-status';
 export * from './duplicate.exception';
+export * from './phone-duplicate.exception';
 export * from './event.service';
 export * from './membership.service';
 export * from './invitation.service';

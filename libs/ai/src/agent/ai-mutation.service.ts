@@ -243,12 +243,13 @@ export class AiMutationService {
     ctx: OperationContext,
     personName: string,
     phone: string,
+    confirmSharedPhone?: boolean,
   ): Promise<StageResult> {
     if (!phone.trim()) return clarify('What is the phone number?');
     const person = await this.resolver.resolvePerson(ctx.event.eventId, personName);
     if (person.status === 'ambiguous') return ambiguous(person.candidates);
     if (person.status !== 'resolved') return clarify(`I don't know anyone called ${personName}.`);
-    await this.people.updateContact(ctx, person.personId, phone.trim());
+    await this.people.updateContact(ctx, person.personId, phone.trim(), confirmSharedPhone);
     return {
       status: 'done',
       message: `Saved ${phone.trim()} for ${person.displayName} — they can now receive SMS reminders.`,

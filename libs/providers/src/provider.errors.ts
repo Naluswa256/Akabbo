@@ -16,3 +16,26 @@ export class ProviderNotImplementedError extends Error {
     this.name = 'ProviderNotImplementedError';
   }
 }
+
+/**
+ * Thrown by an LLM provider when the API rate-limit or quota is exhausted and
+ * all retry attempts have been spent.
+ *
+ * Distinguished from a generic Error so that callers (e.g. AssistantService)
+ * can return a graceful "assistant is busy" user-facing message rather than a
+ * hard failure, while still correctly refunding AI credits for the turn.
+ */
+export class LlmRateLimitedError extends Error {
+  /** HTTP status that triggered the exhaustion (typically 429 or 503). */
+  readonly status: number;
+
+  constructor(status: number, detail?: string) {
+    super(
+      `LLM rate limit exhausted (HTTP ${status})${
+        detail ? `: ${detail}` : ''
+      } — all retry attempts spent.`,
+    );
+    this.name = 'LlmRateLimitedError';
+    this.status = status;
+  }
+}

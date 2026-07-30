@@ -10,6 +10,7 @@ import {
   LlmToolSpec,
 } from '@akabbo/providers';
 import { ReportRef } from '@akabbo/ledger';
+import { LlmRateLimitedError } from '@akabbo/providers';
 import { CaptureService, CaptureResult } from '../capture.service';
 import { UsageMeter } from '../usage-meter.service';
 import { costMicroUsd } from '../pricing';
@@ -218,9 +219,25 @@ export class AssistantService {
         startTime,
       );
     } catch (err) {
-      // The turn never completed — give the credit back rather than charging
-      // for work that didn't happen.
+      // Credit is always refunded when a turn doesn't complete — regardless of
+      // the failure reason (rate-limit, tool error, network, etc.).
       await this.billing.refundAiCredit(scope, reserveKey).catch(() => {});
+
+      // Rate-limit / model overload: return a graceful reply the frontend can
+      // show as a retry prompt rather than a hard HTTP error. The credit has
+      // already been refunded above, so the user is never charged for a busy turn.
+      if (err instanceof LlmRateLimitedError) {
+        this.logger.warn(`AI rate-limited (HTTP ${err.status}); returning busy reply`);
+        return {
+          reply:
+            'The AI assistant is currently receiving very high demand. ' +
+            'Your request was not charged — please try again in a moment.',
+          staged: [],
+          reportRefs: [],
+          steps: 0,
+        };
+      }
+
       throw err;
     }
   }

@@ -5,6 +5,7 @@ import {
   LlmProvider,
   LlmToolCall,
 } from './llm.provider';
+import { LlmRateLimitedError } from '../provider.errors';
 
 /**
  * Gemini adapter (primary LLM, blueprint §5) implementing our LlmProvider
@@ -108,10 +109,16 @@ export class GeminiLlmProvider implements LlmProvider {
    * Google-side condition, most common right after a model release and during
    * peak hours, that Google's own guidance says to retry. 429 (rate) and 500 are
    * likewise retried; 4xx (our bug) fail fast.
+   *
+   * Throws {@link LlmRateLimitedError} (not a generic Error) when 429/503
+   * attempts are exhausted, so the assistant layer can surface a graceful
+   * "assistant is busy" message rather than a hard failure.
    */
   private async post(url: string, body: string): Promise<unknown> {
     const RETRYABLE = new Set([429, 500, 503]);
+    const RATE_LIMIT = new Set([429, 503]); // signals quota/overload, not our bug
     const maxAttempts = 4;
+    let lastStatus = 0;
     let lastError = '';
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       const res = await fetch(url, {
@@ -122,11 +129,17 @@ export class GeminiLlmProvider implements LlmProvider {
       if (res.ok) return res.json();
 
       const text = await res.text();
+      lastStatus = res.status;
       lastError = `Gemini request failed (${res.status}): ${text.slice(0, 300)}`;
       if (!RETRYABLE.has(res.status) || attempt === maxAttempts) break;
       // 0.5s, 1s, 2s + jitter — spread retries so we don't hammer a busy model.
       const backoffMs = 500 * 2 ** (attempt - 1) + Math.floor(Math.random() * 250);
       await new Promise((r) => setTimeout(r, backoffMs));
+    }
+    // Rate-limit / overload exhausted — throw a typed error so the caller
+    // (AssistantService) can degrade gracefully rather than crashing the turn.
+    if (RATE_LIMIT.has(lastStatus)) {
+      throw new LlmRateLimitedError(lastStatus, lastError);
     }
     throw new Error(lastError);
   }

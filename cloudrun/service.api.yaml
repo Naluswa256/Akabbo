@@ -14,7 +14,7 @@ spec:
     metadata:
       annotations:
         autoscaling.knative.dev/minScale: '0'
-        autoscaling.knative.dev/maxScale: '4'
+        autoscaling.knative.dev/maxScale: '20'
         # Cloud SQL Auth Proxy connection (Unix socket — no IP allowlist needed).
         run.googleapis.com/cloudsql-instances: PROJECT_ID:europe-west1:akabbo-staging
     spec:

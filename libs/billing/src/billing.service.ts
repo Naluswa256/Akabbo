@@ -11,9 +11,6 @@ import {
   PaymentWebhookEvent,
 } from '@akabbo/providers';
 
-/** How many SMS credits the free trial grants, once per event (metering §10). */
-const FREE_TRIAL_SMS = 30;
-
 /**
  * Billing & Entitlements (metering doc §7 — the fifth bounded context). Owns the
  * WRITE side of billing: free trials, subscriptions, one-off event packs, the
@@ -103,8 +100,7 @@ export class BillingService implements OnModuleInit {
 
   /**
    * Start the permanent, volume-gated FREE trial for a new event (metering §10):
-   * a TRIALING FREE grant + a one-time 30-SMS allowance. Idempotent — one grant
-   * per event (DB unique) and the SMS grant is keyed on the event.
+   * a TRIALING FREE grant + a one-time SMS/AI allowance from PLAN_CATALOG.
    */
   async startFreeTrial(eventId: string, _ownerUserId: string): Promise<void> {
     const free = await this.plan('FREE');
@@ -113,16 +109,16 @@ export class BillingService implements OnModuleInit {
       create: { eventId, planId: free.id, status: GrantStatus.TRIALING },
       update: {},
     });
-    // 30 free SMS credits + 50 free AI credits, once — idempotency key ties it to the event.
+    // Free trial credits dynamically loaded from PLAN_CATALOG.FREE
     await this.grantCredits(
       { eventId },
-      FREE_TRIAL_SMS,
+      free.includedSmsCredits,
       `trial-sms:${eventId}`,
       'free trial SMS allowance',
     );
     await this.grantAiCredits(
       { eventId },
-      free.includedAiCredits || 50,
+      free.includedAiCredits,
       `trial-ai:${eventId}`,
       'free trial AI allowance',
     );
@@ -149,13 +145,13 @@ export class BillingService implements OnModuleInit {
     }
     await this.grantCredits(
       { accountId },
-      FREE_TRIAL_SMS,
+      free.includedSmsCredits,
       `trial-sms:account:${accountId}`,
       'free trial SMS allowance (account)',
     );
     await this.grantAiCredits(
       { accountId },
-      free.includedAiCredits || 50,
+      free.includedAiCredits,
       `trial-ai:account:${accountId}`,
       'free trial AI allowance (account)',
     );

@@ -1119,7 +1119,7 @@ export class CaptureService {
               description: call.args.description,
               budgetItemId,
             },
-            prompt: `Add ${name} as a contributor, record their pledge of ${formatAmount(call.args.amount)}, and ${formatAmount(receivedNow)} already received?`,
+            prompt: `Add ${name} as a contributor, record their pledge of ${formatAmount(call.args.amount)}${describeSuffix(call.args.description)}, and ${formatAmount(receivedNow)} already received?`,
           };
         }
         return {
@@ -1132,7 +1132,7 @@ export class CaptureService {
             description: call.args.description,
             budgetItemId,
           },
-          prompt: `Add ${name} as a contributor and record their pledge of ${formatAmount(call.args.amount)}?`,
+          prompt: `Add ${name} as a contributor and record their pledge of ${formatAmount(call.args.amount)}${describeSuffix(call.args.description)}?`,
         };
       }
       return {
@@ -1145,7 +1145,7 @@ export class CaptureService {
           description: call.args.description,
           budgetItemId,
         },
-        prompt: `Add ${name} as a contributor and record their contribution of ${formatAmount(call.args.amount)}?`,
+        prompt: `Add ${name} as a contributor and record their contribution of ${formatAmount(call.args.amount)}${describeSuffix(call.args.description)}?`,
       };
     }
     if (person.status === 'ambiguous') {
@@ -1167,7 +1167,7 @@ export class CaptureService {
             description: call.args.description,
             budgetItemId,
           },
-          prompt: `Record ${person.displayName}'s pledge of ${formatAmount(call.args.amount)}, with ${formatAmount(receivedNow)} already received?`,
+          prompt: `Record ${person.displayName}'s pledge of ${formatAmount(call.args.amount)}${describeSuffix(call.args.description)}, with ${formatAmount(receivedNow)} already received?`,
         };
       }
       return {
@@ -1181,7 +1181,7 @@ export class CaptureService {
           description: call.args.description,
           budgetItemId,
         },
-        prompt: `Record ${person.displayName}'s pledge of ${formatAmount(call.args.amount)}?`,
+        prompt: `Record ${person.displayName}'s pledge of ${formatAmount(call.args.amount)}${describeSuffix(call.args.description)}?`,
       };
     }
 
@@ -1202,7 +1202,7 @@ export class CaptureService {
           description: call.args.description,
           budgetItemId,
         },
-        prompt: `Record ${person.displayName}'s contribution of ${formatAmount(call.args.amount)}?`,
+        prompt: `Record ${person.displayName}'s contribution of ${formatAmount(call.args.amount)}${describeSuffix(call.args.description)}?`,
       };
     }
     if (pledge.status === 'ambiguous') {
@@ -1259,6 +1259,15 @@ export class CaptureService {
       options,
     };
   }
+}
+
+/** For a staging PROMPT (the confirmation card the human sees before
+ *  anything is recorded): " (100 cartons of water)" when an in-kind
+ *  description is set, else "". Without this, several in-kind pledges staged
+ *  in one turn all render as an indistinguishable "...pledge of 0?" card —
+ *  no way to tell which Confirm button confirms what. */
+function describeSuffix(description?: string): string {
+  return description ? ` (${description})` : '';
 }
 
 export type { ExecutionResult };

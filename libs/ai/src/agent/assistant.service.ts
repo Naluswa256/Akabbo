@@ -453,11 +453,27 @@ export class AssistantService {
           });
           // Extract reportRef for the structured payload — model receives a lean summary
           const { reportRef, preview, tier, ambiguousGroup } = reportResult;
+          const isComplete = preview.length >= reportRef.totalRecords;
+          // In-band instruction, adjacent to the data — a rule stated once in
+          // the (very large) system prompt was not reliably stopping the
+          // model from making repeated redundant tool calls (get_event_overview,
+          // re-querying with a different reportType/sort) before ever
+          // answering, or from writing only a handful of rows despite having
+          // everything. Putting the directive here, next to the actual row
+          // count, is far harder to miss or override.
+          const instruction = isComplete
+            ? `This is the COMPLETE result — all ${preview.length} row(s) are in "preview", nothing is missing. ` +
+              'Do NOT call query_event_report, get_event_overview, or any other report tool again for this question. ' +
+              `Write your final reply now: list EVERY one of the ${preview.length} row(s) by name, one per line — never fewer, never a subset.`
+            : `This is a PARTIAL result — only ${preview.length} of ${reportRef.totalRecords} total rows are included. ` +
+              'Say so explicitly in your reply (e.g. "showing N of TOTAL").';
           const toolContent = {
             tier,
             totalRecords: reportRef.totalRecords,
             totalAmount: reportRef.totalAmount,
             preview,
+            isComplete,
+            instruction,
             filterUrl: reportRef.filterUrl,
             ...(ambiguousGroup ? { ambiguousGroup } : {}),
           };

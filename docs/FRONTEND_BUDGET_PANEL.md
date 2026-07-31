@@ -101,6 +101,29 @@ If the money was already recorded as a payment against an existing pledge (not a
 
 The organizer can say things like *"allocate John's payment to catering"* or *"put 200k of Sarah's money toward the venue"*. The AI resolves the named person's most recent payment that still has unallocated value left, stages the same allocation, and the confirm flow is identical to every other staged action. If they have no unallocated payment, or ask for more than what's left, the AI asks for clarification instead of guessing — you'll see that as a normal `clarification` chat response, not an error.
 
+### 4c. Reading back *who* funded a line (new)
+
+Coverage alone (`covered: "140000"`) doesn't say who it came from — this is the endpoint for that, e.g. a "who paid for this" expand/tooltip on each budget row:
+
+```http
+GET /events/:id/budget/items/:itemId/funders
+```
+```json
+{
+  "status": "resolved",
+  "itemName": "Certificates",
+  "target": "140000",
+  "covered": "140000",
+  "funders": [
+    { "displayName": "David Kabasi", "value": "140000", "occurredAt": "2026-07-29T10:15:00.000Z" }
+  ]
+}
+```
+
+`funders` is one row per payment allocated to this item (ordered oldest first) — a line funded by three different people shows three rows, and `covered` is their sum (matches the same figure `/report`'s `budget.items[].covered` already gives you). `status` is `"not_found"` if the item id doesn't exist in this event — no `"ambiguous"` case on this route since you're passing an id, not a name (the AI chat equivalent resolves by name and can hit that case; REST doesn't).
+
+Same capability is available to the AI chat now too (`get_budget_item_funders`) — "who funded X" / "who paid for X" now has a real answer instead of the generic "the system doesn't display that" response you may have seen before.
+
 ---
 
 ## 5. Quick reference
@@ -113,6 +136,7 @@ The organizer can say things like *"allocate John's payment to catering"* or *"p
 | Edit a line | `PATCH /events/:id/budget/items/:itemId` |
 | Record money that will cover a line | `POST /events/:id/contributions` |
 | Earmark payment → budget line ("mark covered") | `POST /events/:id/allocations` |
+| Who funded a specific line | `GET /events/:id/budget/items/:itemId/funders` |
 | Any of the above via chat | `POST /assistant` (staged, confirm via `/pending/:id/confirm`) |
 
 All money fields are plain digit strings of integer minor units — format for display yourself, never comma-formatted or floats from the API.

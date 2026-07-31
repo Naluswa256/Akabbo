@@ -19,7 +19,14 @@ export interface ReportFilters {
   searchTerm?: string;
   sortField?: 'amount' | 'name';
   sortDirection?: 'asc' | 'desc';
+  /** How many rows to actually return inline. Defaults to 5 (a quick glance) —
+   *  pass a higher value (e.g. totalRecords) for "show me everyone"/"the full
+   *  list"/"comprehensive" requests. Capped at MAX_LIMIT regardless. */
+  limit?: number;
 }
+
+const DEFAULT_LIMIT = 5;
+const MAX_LIMIT = 200;
 
 export interface ReportPreviewRow {
   name: string;
@@ -43,7 +50,9 @@ export interface ReportRef {
 export interface ReportResult {
   tier: PresentationTier;
   reportRef: ReportRef;
-  /** Top-5 preview rows for inline summary in chat (always present regardless of tier) */
+  /** Up to `input.limit` rows (default 5) for inline chat — pass a higher
+   *  limit for "show me everyone"/comprehensive requests instead of treating
+   *  this as a fixed teaser. */
   preview: ReportPreviewRow[];
   /** Set when groupName matched 0 or 2+ groups — model should ask which group */
   ambiguousGroup?: { term: string; candidates: { id: string; name: string }[] };
@@ -116,6 +125,8 @@ export class ReportService {
       }
     }
 
+    const limit = Math.min(Math.max(input.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
+
     // ── Query by report type ──────────────────────────────────────────────────
     let totalRecords = 0;
     let totalAmountBigInt = 0n;
@@ -131,8 +142,7 @@ export class ReportService {
       totalRecords = rows.length;
       totalAmountBigInt = rows.reduce((acc, r) => acc + r._received, 0n);
 
-      const top5 = rows.slice(0, 5);
-      for (const r of top5) {
+      for (const r of rows.slice(0, limit)) {
         const owed = outstanding(r._committed, r._received);
         preview.push({
           name: r.displayName,
@@ -156,7 +166,7 @@ export class ReportService {
       totalRecords = items.length;
       totalAmountBigInt = items.reduce((acc: bigint, i) => acc + i.targetValue, 0n);
 
-      for (const i of items.slice(0, 5)) {
+      for (const i of items.slice(0, limit)) {
         const allocated = i.allocations.reduce((acc: bigint, a) => acc + a.value, 0n);
         preview.push({
           name: i.name,
@@ -179,7 +189,7 @@ export class ReportService {
       });
       totalRecords = fulfillments.length;
       totalAmountBigInt = fulfillments.reduce((acc: bigint, f) => acc + f.value, 0n);
-      for (const f of fulfillments.slice(0, 5)) {
+      for (const f of fulfillments.slice(0, limit)) {
         preview.push({
           name: f.pledge.person.displayName,
           amount: moneyToString(f.value),

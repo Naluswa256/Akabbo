@@ -27,6 +27,10 @@ export const recordPledgeArgs = z.object({
   personName: z.string().min(1),
   amount: amountString,
   type: z.enum(['CASH', 'ITEM', 'SERVICE']).optional(),
+  /** What an ITEM/SERVICE pledge actually is ("5 kg of meat", "100 cartons of
+   *  water") — REQUIRED in practice for ITEM/SERVICE; without it the pledge
+   *  is recorded with no record of what was promised. */
+  description: z.string().min(1).max(500).optional(),
   /** Optional — set ONLY when the user states an amount already received in
    *  the SAME breath as the pledge ("pledged 1M, already paid 200k"). Records
    *  both atomically as one pledge with one fulfillment against it, never two
@@ -100,13 +104,18 @@ export const LLM_TOOL_SPECS = [
     description:
       'Record a pledge (a promise to contribute) by a named person. If the SAME message also says how much they\'ve already paid ' +
       '(e.g. "pledged 1M, has paid 200k so far"), ALWAYS pass that as `receivedNow` here too — never call record_payment separately ' +
-      'in the same turn for a pledge just created in this call, since it cannot see the pledge until this is confirmed.',
+      'in the same turn for a pledge just created in this call, since it cannot see the pledge until this is confirmed. ' +
+      "For an in-kind pledge (type ITEM/SERVICE, e.g. \"5 kg of meat\"), ALWAYS pass `description` saying what it is — " +
+      'without it the pledge is recorded with no record of what was promised. If the user names several distinct ' +
+      'in-kind items in one message ("100 cartons of water and 5 kg of meat"), call this tool ONCE PER ITEM — never ' +
+      'bundle multiple items into one description, since each needs its own trackable amount/quantity.',
     parameters: {
       type: 'object',
       properties: {
         personName: { type: 'string' },
-        amount: { type: 'string', description: 'integer minor units, digits only' },
+        amount: { type: 'string', description: 'integer minor units, digits only. "0" for a pure in-kind pledge with no stated cash value.' },
         type: { type: 'string', enum: ['CASH', 'ITEM', 'SERVICE'] },
+        description: { type: 'string', description: 'What the item/service is, for ITEM/SERVICE pledges.' },
         receivedNow: {
           type: 'string',
           description: 'Optional — amount already paid toward this pledge, integer minor units, digits only.',

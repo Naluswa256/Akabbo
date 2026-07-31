@@ -28,12 +28,16 @@ export interface ExecutionResult {
  */
 export type StoredAction =
   | { tool: 'add_person'; displayName: string; phone?: string; confirmSharedPhone?: boolean }
+  /** CASH by default; ITEM/SERVICE for an in-kind pledge ("5 kg of meat"),
+   *  with `description` saying what it is — without it, a confirmed in-kind
+   *  pledge is just a bare "pledge of 0" with no record of what was promised. */
   | {
       tool: 'record_pledge';
       personId?: string;
       displayName: string;
       amount: string;
       type?: PledgeType;
+      description?: string;
       phone?: string;
     }
   /** A pledge AND its first payment, atomically — see FulfillmentService
@@ -45,6 +49,7 @@ export type StoredAction =
       amount: string;
       receivedNow: string;
       type?: PledgeType;
+      description?: string;
       phone?: string;
     }
   | { tool: 'record_payment'; pledgeId: string; displayName: string; amount: string }
@@ -162,6 +167,7 @@ export class ToolExecutor {
           source,
           action.type,
           action.phone,
+          action.description,
         );
       case 'record_pledge_with_payment':
         return this.recordPledgeWithPayment(
@@ -173,6 +179,7 @@ export class ToolExecutor {
           source,
           action.type,
           action.phone,
+          action.description,
         );
       case 'record_payment':
         return this.recordPayment(
@@ -379,6 +386,7 @@ export class ToolExecutor {
     source: ProvenanceSource,
     type?: PledgeType,
     phone?: string,
+    description?: string,
   ): Promise<ExecutionResult> {
     const targetPersonId =
       personId ?? (await this.resolveOrCreatePerson(ctx, displayName, source, phone));
@@ -386,10 +394,12 @@ export class ToolExecutor {
       personId: targetPersonId,
       committedValue: amount,
       type,
+      description,
       source,
     });
+    const what = description ? ` (${description})` : '';
     return {
-      message: `Recorded ${displayName}'s pledge of ${formatAmount(amount)}.`,
+      message: `Recorded ${displayName}'s pledge of ${formatAmount(amount)}${what}.`,
       data: pledge,
     };
   }
@@ -408,6 +418,7 @@ export class ToolExecutor {
     source: ProvenanceSource,
     type?: PledgeType,
     phone?: string,
+    description?: string,
   ): Promise<ExecutionResult> {
     const targetPersonId =
       personId ?? (await this.resolveOrCreatePerson(ctx, displayName, source, phone));
@@ -416,11 +427,13 @@ export class ToolExecutor {
       committedValue,
       receivedNow,
       type,
+      description,
       source,
     });
+    const what = description ? ` (${description})` : '';
     return {
       message:
-        `Recorded ${displayName}'s pledge of ${formatAmount(committedValue)}, ` +
+        `Recorded ${displayName}'s pledge of ${formatAmount(committedValue)}${what}, ` +
         `with ${formatAmount(receivedNow)} already received. Outstanding: ${formatAmount(result.outstanding)}.`,
       data: result,
     };

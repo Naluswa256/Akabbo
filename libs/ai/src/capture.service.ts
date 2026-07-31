@@ -1088,6 +1088,7 @@ export class CaptureService {
               amount: call.args.amount,
               receivedNow,
               type: call.args.type as PledgeType | undefined,
+              description: call.args.description,
             },
             prompt: `Add ${name} as a contributor, record their pledge of ${formatAmount(call.args.amount)}, and ${formatAmount(receivedNow)} already received?`,
           };
@@ -1099,6 +1100,7 @@ export class CaptureService {
             displayName: name,
             amount: call.args.amount,
             type: call.args.type as PledgeType | undefined,
+            description: call.args.description,
           },
           prompt: `Add ${name} as a contributor and record their pledge of ${formatAmount(call.args.amount)}?`,
         };
@@ -1131,6 +1133,7 @@ export class CaptureService {
             amount: call.args.amount,
             receivedNow,
             type: call.args.type as PledgeType | undefined,
+            description: call.args.description,
           },
           prompt: `Record ${person.displayName}'s pledge of ${formatAmount(call.args.amount)}, with ${formatAmount(receivedNow)} already received?`,
         };
@@ -1143,6 +1146,7 @@ export class CaptureService {
           displayName: person.displayName,
           amount: call.args.amount,
           type: call.args.type as PledgeType | undefined,
+          description: call.args.description,
         },
         prompt: `Record ${person.displayName}'s pledge of ${formatAmount(call.args.amount)}?`,
       };

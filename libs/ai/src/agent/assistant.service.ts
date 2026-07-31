@@ -426,6 +426,10 @@ export class AssistantService {
           return json(await this.query.collectedInPeriod(ctx, String(args.from), String(args.to)));
         case 'get_budget':
           return json(await this.query.budgetBreakdown(ctx));
+        case 'get_budget_item_funders':
+          return json(
+            await this.query.budgetItemFunders(ctx, String(args.itemName ?? '')),
+          );
         case 'get_group_contributions':
           return json({ groups: await this.query.groupContributions(ctx) });
         case 'query_event_report': {
@@ -1666,6 +1670,17 @@ const SYSTEM_PROMPT = [
     '("how much has X paid") stays a plain sentence per §37 — do not wrap one person in a ' +
     'numbered list.',
   '',
+  'CRITICAL — never present a partial list as if it were complete. get_event_overview\'s ' +
+    '"top contributors" is a FIXED top-5 snapshot; query_event_report\'s preview may also be ' +
+    'fewer rows than totalRecords. If what you were given is fewer rows than the true total, ' +
+    'the numbered list must say so — e.g. "Showing 5 of 14 contributors:" before the list, or ' +
+    '"...and 9 more" after it. Different phrasings of the same underlying question ("progress ' +
+    'report" vs "everyone who has pledged" vs "show contributors with totals") are NOT the ' +
+    'same question — re-call the appropriate tool with parameters matching what was actually ' +
+    'asked (e.g. reportType/status filters) rather than reusing a prior turn\'s snapshot. Two ' +
+    'differently-worded questions returning byte-identical output is a sign the wrong tool or ' +
+    'wrong filters were used, not that the answer is settled.',
+  '',
   '============================================================',
   '40. FINAL OPERATING PRINCIPLE',
   '============================================================',
@@ -1702,7 +1717,10 @@ export const AGENT_TOOL_SPECS: LlmToolSpec[] = [
   {
     name: 'get_event_overview',
     description:
-      'Overall event state: target, % covered, total pledged/received/outstanding, contributor counts, budget gaps, top contributors. Use for "how are we doing".',
+      'Overall event state: target, % covered, total pledged/received/outstanding, contributor counts, budget gaps, and a SHORT top-5-by-received snapshot (fixed at 5, always, regardless of how many contributors there actually are). ' +
+      'Use ONLY for "how are we doing" / a quick aggregate summary. ' +
+      'Do NOT use this for "show everyone", "who has pledged", "list contributors", "progress report" listing people, or anything asking for a complete or filtered list — ' +
+      'its top-5 is a snapshot, not the full picture, and calling it for a "show me all X" question silently truncates the real answer. Use query_event_report for those instead.',
     parameters: { type: 'object', properties: {} },
   },
   {
@@ -1731,6 +1749,18 @@ export const AGENT_TOOL_SPECS: LlmToolSpec[] = [
     description:
       'Budget items with per-item coverage (funded / partially funded / unfunded) plus totals and the unfunded gap.',
     parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'get_budget_item_funders',
+    description:
+      'WHO funded a specific budget line and how much each person put toward it — use for "who funded catering", ' +
+      '"who paid for the certificates". get_budget only has the item\'s total coverage, not who it came from; this ' +
+      'is the tool for that. Returns each funder\'s name, the amount they put toward THIS item, and when.',
+    parameters: {
+      type: 'object',
+      properties: { itemName: { type: 'string', description: 'Existing budget item name.' } },
+      required: ['itemName'],
+    },
   },
   {
     name: 'add_person',
@@ -1784,9 +1814,12 @@ export const AGENT_TOOL_SPECS: LlmToolSpec[] = [
       'List or count contributors, pledges, or payments — USE THIS (not any other tool) for any list question. ' +
       'Tool selection rules: ' +
       '(1) Use find_contributor for a SPECIFIC NAMED person. ' +
-      '(2) Use get_event_overview for AGGREGATE TOTALS ONLY. ' +
-      '(3) Use query_event_report for EVERYTHING ELSE — "who hasn\'t paid", "show me the list", "outstanding contributors", "bride side contributors", etc. ' +
-      'Returns: tier (INLINE_CHAT / MEDIUM_PREVIEW / LARGE_REPORT), totalRecords, totalAmount, top-5 preview rows, and a filterUrl for the frontend. ' +
+      '(2) Use get_event_overview ONLY for a quick aggregate summary with no listing intent ("how are we doing") — its "top contributors" is a fixed top-5 snapshot, never a real answer to "show/list/everyone/all". ' +
+      '(3) Use query_event_report for EVERYTHING ELSE that names or implies a list — "who hasn\'t paid", "show me the list", "everyone who has pledged", "progress report", "outstanding contributors", "bride side contributors", etc. ' +
+      '(4) Use get_budget_item_funders for "who funded/paid for [a specific budget line]" — get_budget only has each item\'s total, not who it came from. ' +
+      'query_event_report returns: tier (INLINE_CHAT / MEDIUM_PREVIEW / LARGE_REPORT), totalRecords, totalAmount, a preview of rows, and a filterUrl for the frontend. ' +
+      'The preview is NOT the full list — if totalRecords is larger than the preview you were given, SAY SO explicitly ' +
+      '(e.g. "showing 5 of 14 — full list at the link") rather than presenting the preview as if it were everyone. ' +
       'If ambiguousGroup is returned, ask the user which group they mean before proceeding. ' +
       'NEVER call list_contributors — it is retired.',
     parameters: {
@@ -1826,13 +1859,24 @@ export const AGENT_TOOL_SPECS: LlmToolSpec[] = [
       'Record a pledge (a promise to contribute) by a named person. Staged for confirmation. ' +
       'If the SAME message also says how much they\'ve already paid (e.g. "pledged 1M, has paid 200k so far"), ' +
       'ALWAYS pass that as `receivedNow` here too — never call record_payment separately in the same turn for a ' +
-      'pledge just created in this call, since it cannot see the pledge until this is confirmed.',
+      'pledge just created in this call, since it cannot see the pledge until this is confirmed. ' +
+      "For an in-kind pledge (type ITEM/SERVICE, e.g. \"5 kg of meat\", \"100 cartons of water\"), ALWAYS pass " +
+      '`description` saying what it is — without it the pledge is recorded with no record of what was promised. ' +
+      'If the user names SEVERAL distinct in-kind items in one message ("100 cartons of water and 5 kg of meat and ' +
+      '2 kg of sugar"), call this tool ONCE PER ITEM — never bundle multiple different items into one description.',
     parameters: {
       type: 'object',
       properties: {
         personName: { type: 'string' },
-        amount: { type: 'string', description: 'UGX amount, e.g. "500000" or "500k"' },
+        amount: {
+          type: 'string',
+          description: 'UGX amount, e.g. "500000" or "500k". Use "0" for a pure in-kind pledge with no stated cash value.',
+        },
         type: { type: 'string', enum: ['CASH', 'ITEM', 'SERVICE'] },
+        description: {
+          type: 'string',
+          description: 'What the item/service is, for ITEM/SERVICE pledges.',
+        },
         receivedNow: {
           type: 'string',
           description: 'Optional — amount already paid toward this pledge, e.g. "200000" or "200k".',

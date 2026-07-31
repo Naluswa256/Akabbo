@@ -64,6 +64,9 @@ export interface RecordPledgeWithPaymentInput {
    *  Omit or 0 for a plain pledge with no payment yet. */
   receivedNow?: bigint;
   type?: PledgeType;
+  /** What an ITEM/SERVICE pledge actually is ("5 kg of meat") — mirrors
+   *  Pledge.description for in-kind pledges (§9.3). */
+  description?: string;
   method?: PaymentMethod;
   note?: string;
   idempotencyKey?: string;
@@ -290,6 +293,7 @@ export class FulfillmentService {
           personId: input.personId,
           type: input.type ?? PledgeType.CASH,
           committedValue: input.committedValue,
+          description: input.description ?? null,
           status: PledgeStatus.PLEDGED, // recomputed below once the payment (if any) lands
           source,
           createdById: ctx.actor.userId,

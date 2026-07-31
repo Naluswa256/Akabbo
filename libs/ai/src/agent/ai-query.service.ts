@@ -358,4 +358,64 @@ export class AiQueryService {
       };
     });
   }
+
+  /**
+   * Who actually funded a budget line — allocations only record a total on
+   * the budget item itself (§13), so "who funded catering" needs an explicit
+   * join through allocation → fulfillment → pledge → person. Without this the
+   * AI can see an item is covered but never who covered it.
+   */
+  async budgetItemFunders(
+    ctx: OperationContext,
+    itemName: string,
+  ): Promise<
+    | {
+        status: 'resolved';
+        itemName: string;
+        target: string;
+        covered: string;
+        funders: { displayName: string; value: string; occurredAt: string }[];
+      }
+    | { status: 'not_found' }
+    | { status: 'ambiguous'; candidates: string[] }
+  > {
+    this.permissions.assert(ctx.event.role, 'budget:read');
+    return this.tenant.runInEvent(ctx.event.eventId, async (tx) => {
+      const items = await tx.$queryRaw<{ id: string; name: string; target: bigint }[]>`
+        SELECT id, name, target_value::bigint AS target
+        FROM budget_item
+        WHERE lower(name) = lower(${itemName.trim()})
+      `;
+      if (items.length === 0) return { status: 'not_found' };
+      if (items.length > 1) {
+        return { status: 'ambiguous', candidates: items.map((i) => i.name) };
+      }
+      const item = items[0];
+
+      const funders = await tx.$queryRaw<
+        { display_name: string; value: bigint; occurred_at: Date }[]
+      >`
+        SELECT p.display_name, a.value::bigint AS value, f.occurred_at
+        FROM allocation a
+        JOIN fulfillment f ON a.fulfillment_id = f.id
+        JOIN pledge pl ON f.pledge_id = pl.id
+        JOIN person p ON pl.person_id = p.id
+        WHERE a.budget_item_id = ${item.id}::uuid
+        ORDER BY f.occurred_at ASC
+      `;
+      const covered = funders.reduce((sum, f) => sum + f.value, 0n);
+
+      return {
+        status: 'resolved',
+        itemName: item.name,
+        target: moneyToString(item.target),
+        covered: moneyToString(covered),
+        funders: funders.map((f) => ({
+          displayName: f.display_name,
+          value: moneyToString(f.value),
+          occurredAt: f.occurred_at.toISOString(),
+        })),
+      };
+    });
+  }
 }

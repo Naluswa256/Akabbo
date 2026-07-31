@@ -1,8 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { OperationContext, PermissionService } from '@akabbo/access';
-import { PrismaService } from '@akabbo/prisma';
 import { moneyToString } from './money';
 import { outstanding } from './pledge-status';
+import { TenantContext, TenantTx } from './tenant-context.service';
 
 export type ReportType = 'CONTRIBUTORS' | 'PLEDGES' | 'OUTSTANDING' | 'BUDGET' | 'PAYMENTS';
 export type ContributorStatus = 'all' | 'unpaid' | 'partial' | 'complete' | 'outstanding';
@@ -76,7 +76,7 @@ export interface ReportResult {
 @Injectable()
 export class ReportService {
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly tenant: TenantContext,
     private readonly permissions: PermissionService,
   ) {}
 
@@ -85,17 +85,14 @@ export class ReportService {
    * Returns the matching group id, or an ambiguity result for the model to surface.
    */
   private async resolveGroupName(
-    eventId: string,
+    tx: TenantTx,
     groupName: string,
   ): Promise<
     | { ok: true; groupId: string; groupNameResolved: string }
     | { ok: false; candidates: { id: string; name: string }[] }
   > {
-    const matches = await this.prisma.contributorGroup.findMany({
-      where: {
-        eventId,
-        name: { contains: groupName, mode: 'insensitive' },
-      },
+    const matches = await tx.contributorGroup.findMany({
+      where: { name: { contains: groupName, mode: 'insensitive' } },
       select: { id: true, name: true },
     });
 
@@ -117,96 +114,105 @@ export class ReportService {
     this.permissions.assert(ctx.event.role, 'event:read');
     const eventId = ctx.event.eventId;
 
-    // ── Group name resolution ────────────────────────────────────────────────
-    let resolvedGroupId: string | undefined;
-    let resolvedGroupName: string | undefined;
-    let ambiguousGroup: ReportResult['ambiguousGroup'];
+    const {
+      resolvedGroupId,
+      resolvedGroupName,
+      ambiguousGroup,
+      totalRecords,
+      totalAmountBigInt,
+      preview,
+    } = await this.tenant.runInEvent(eventId, async (tx) => {
+      // ── Group name resolution ──────────────────────────────────────────────
+      let resolvedGroupId: string | undefined;
+      let resolvedGroupName: string | undefined;
+      let ambiguousGroup: ReportResult['ambiguousGroup'];
 
-    if (input.groupName) {
-      const resolution = await this.resolveGroupName(eventId, input.groupName);
-      if (!resolution.ok) {
-        ambiguousGroup = { term: input.groupName, candidates: resolution.candidates };
-        // Still proceed but without group filter so model can surface the ambiguity
+      if (input.groupName) {
+        const resolution = await this.resolveGroupName(tx, input.groupName);
+        if (!resolution.ok) {
+          ambiguousGroup = { term: input.groupName, candidates: resolution.candidates };
+          // Still proceed but without group filter so model can surface the ambiguity
+        } else {
+          resolvedGroupId = resolution.groupId;
+          resolvedGroupName = resolution.groupNameResolved;
+        }
+      }
+
+      const limit = Math.min(Math.max(input.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
+
+      // ── Query by report type ────────────────────────────────────────────────
+      let totalRecords = 0;
+      let totalAmountBigInt = 0n;
+      const preview: ReportPreviewRow[] = [];
+
+      if (
+        input.reportType === 'CONTRIBUTORS' ||
+        input.reportType === 'OUTSTANDING' ||
+        input.reportType === 'PLEDGES'
+      ) {
+        const rows = await this.queryContributors(tx, input, resolvedGroupId);
+
+        totalRecords = rows.length;
+        totalAmountBigInt = rows.reduce((acc, r) => acc + r._received, 0n);
+
+        for (const r of rows.slice(0, limit)) {
+          const owed = outstanding(r._committed, r._received);
+          preview.push({
+            name: r.displayName,
+            group: r.groupName,
+            amount: moneyToString(r._received),
+            outstanding: owed > 0n ? moneyToString(owed) : undefined,
+            status: r._committed === 0n ? 'no_pledge' : r._received >= r._committed ? 'complete' : r._received > 0n ? 'partial' : 'unpaid',
+            inKind: r._inKind.length > 0 ? r._inKind : undefined,
+          });
+        }
+      } else if (input.reportType === 'BUDGET') {
+        const items = await tx.budgetItem.findMany({
+          select: {
+            id: true,
+            name: true,
+            targetValue: true,
+            allocations: { select: { value: true } },
+          },
+        });
+
+        totalRecords = items.length;
+        totalAmountBigInt = items.reduce((acc: bigint, i) => acc + i.targetValue, 0n);
+
+        for (const i of items.slice(0, limit)) {
+          const allocated = i.allocations.reduce((acc: bigint, a) => acc + a.value, 0n);
+          preview.push({
+            name: i.name,
+            amount: moneyToString(i.targetValue),
+            status: allocated >= i.targetValue && i.targetValue > 0n ? 'complete' : 'partial',
+            outstanding: allocated < i.targetValue ? moneyToString(i.targetValue - allocated) : undefined,
+          });
+        }
       } else {
-        resolvedGroupId = resolution.groupId;
-        resolvedGroupName = resolution.groupNameResolved;
-      }
-    }
-
-    const limit = Math.min(Math.max(input.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
-
-    // ── Query by report type ──────────────────────────────────────────────────
-    let totalRecords = 0;
-    let totalAmountBigInt = 0n;
-    const preview: ReportPreviewRow[] = [];
-
-    if (
-      input.reportType === 'CONTRIBUTORS' ||
-      input.reportType === 'OUTSTANDING' ||
-      input.reportType === 'PLEDGES'
-    ) {
-      const rows = await this.queryContributors(eventId, input, resolvedGroupId);
-
-      totalRecords = rows.length;
-      totalAmountBigInt = rows.reduce((acc, r) => acc + r._received, 0n);
-
-      for (const r of rows.slice(0, limit)) {
-        const owed = outstanding(r._committed, r._received);
-        preview.push({
-          name: r.displayName,
-          group: r.groupName,
-          amount: moneyToString(r._received),
-          outstanding: owed > 0n ? moneyToString(owed) : undefined,
-          status: r._committed === 0n ? 'no_pledge' : r._received >= r._committed ? 'complete' : r._received > 0n ? 'partial' : 'unpaid',
-          inKind: r._inKind.length > 0 ? r._inKind : undefined,
+        // PAYMENTS — every fulfillment, most recent first (no pagination — see
+        // MAX_LIMIT: never truncate, regardless of event size).
+        const fulfillments = await tx.fulfillment.findMany({
+          orderBy: { occurredAt: 'desc' },
+          take: MAX_LIMIT,
+          select: {
+            id: true,
+            value: true,
+            pledge: { select: { person: { select: { displayName: true } } } },
+          },
         });
+        totalRecords = fulfillments.length;
+        totalAmountBigInt = fulfillments.reduce((acc: bigint, f) => acc + f.value, 0n);
+        for (const f of fulfillments.slice(0, limit)) {
+          preview.push({
+            name: f.pledge.person.displayName,
+            amount: moneyToString(f.value),
+            status: 'complete',
+          });
+        }
       }
-    } else if (input.reportType === 'BUDGET') {
-      const items = await this.prisma.budgetItem.findMany({
-        where: { eventId },
-        select: {
-          id: true,
-          name: true,
-          targetValue: true,
-          allocations: { select: { value: true } },
-        },
-      });
 
-      totalRecords = items.length;
-      totalAmountBigInt = items.reduce((acc: bigint, i) => acc + i.targetValue, 0n);
-
-      for (const i of items.slice(0, limit)) {
-        const allocated = i.allocations.reduce((acc: bigint, a) => acc + a.value, 0n);
-        preview.push({
-          name: i.name,
-          amount: moneyToString(i.targetValue),
-          status: allocated >= i.targetValue && i.targetValue > 0n ? 'complete' : 'partial',
-          outstanding: allocated < i.targetValue ? moneyToString(i.targetValue - allocated) : undefined,
-        });
-      }
-    } else {
-      // PAYMENTS — every fulfillment, most recent first (no pagination — see
-      // MAX_LIMIT: never truncate, regardless of event size).
-      const fulfillments = await this.prisma.fulfillment.findMany({
-        where: { eventId },
-        orderBy: { occurredAt: 'desc' },
-        take: MAX_LIMIT,
-        select: {
-          id: true,
-          value: true,
-          pledge: { select: { person: { select: { displayName: true } } } },
-        },
-      });
-      totalRecords = fulfillments.length;
-      totalAmountBigInt = fulfillments.reduce((acc: bigint, f) => acc + f.value, 0n);
-      for (const f of fulfillments.slice(0, limit)) {
-        preview.push({
-          name: f.pledge.person.displayName,
-          amount: moneyToString(f.value),
-          status: 'complete',
-        });
-      }
-    }
+      return { resolvedGroupId, resolvedGroupName, ambiguousGroup, totalRecords, totalAmountBigInt, preview };
+    });
 
     // ── Tier selection ────────────────────────────────────────────────────────
     let tier: PresentationTier = 'INLINE_CHAT';
@@ -256,41 +262,42 @@ export class ReportService {
     search?: string,
   ) {
     this.permissions.assert(ctx.event.role, 'event:read');
-    const eventId = ctx.event.eventId;
 
-    let resolvedGroupId: string | undefined;
-    if (filters.groupName) {
-      const r = await this.resolveGroupName(eventId, filters.groupName);
-      if (r.ok) resolvedGroupId = r.groupId;
-    }
+    return this.tenant.runInEvent(ctx.event.eventId, async (tx) => {
+      let resolvedGroupId: string | undefined;
+      if (filters.groupName) {
+        const r = await this.resolveGroupName(tx, filters.groupName);
+        if (r.ok) resolvedGroupId = r.groupId;
+      }
 
-    const effectiveFilters = search ? { ...filters, searchTerm: search } : filters;
-    const all = await this.queryContributors(eventId, effectiveFilters, resolvedGroupId);
-    const totalRecords = all.length;
-    const totalAmountBigInt = all.reduce((acc: bigint, r) => acc + r._received, 0n);
-    const totalPages = Math.max(1, Math.ceil(totalRecords / pageSize));
-    const start = (page - 1) * pageSize;
-    const rows = all.slice(start, start + pageSize).map((r) => {
-      const owed = outstanding(r._committed, r._received);
+      const effectiveFilters = search ? { ...filters, searchTerm: search } : filters;
+      const all = await this.queryContributors(tx, effectiveFilters, resolvedGroupId);
+      const totalRecords = all.length;
+      const totalAmountBigInt = all.reduce((acc: bigint, r) => acc + r._received, 0n);
+      const totalPages = Math.max(1, Math.ceil(totalRecords / pageSize));
+      const start = (page - 1) * pageSize;
+      const rows = all.slice(start, start + pageSize).map((r) => {
+        const owed = outstanding(r._committed, r._received);
+        return {
+          personId: r.id,
+          name: r.displayName,
+          group: r.groupName,
+          amount: moneyToString(r._received),
+          outstanding: owed > 0n ? moneyToString(owed) : undefined,
+          status: r._committed === 0n ? 'no_pledge' : r._received >= r._committed ? 'complete' : r._received > 0n ? 'partial' : 'unpaid',
+        };
+      });
+
       return {
-        personId: r.id,
-        name: r.displayName,
-        group: r.groupName,
-        amount: moneyToString(r._received),
-        outstanding: owed > 0n ? moneyToString(owed) : undefined,
-        status: r._committed === 0n ? 'no_pledge' : r._received >= r._committed ? 'complete' : r._received > 0n ? 'partial' : 'unpaid',
+        totalRecords,
+        totalAmount: moneyToString(totalAmountBigInt),
+        currency: 'UGX' as const,
+        page,
+        pageSize,
+        totalPages,
+        rows,
       };
     });
-
-    return {
-      totalRecords,
-      totalAmount: moneyToString(totalAmountBigInt),
-      currency: 'UGX' as const,
-      page,
-      pageSize,
-      totalPages,
-      rows,
-    };
   }
 
   /** Export as CSV — always live query, same filters as the paginated endpoint */
@@ -307,7 +314,7 @@ export class ReportService {
   // ── Private helpers ──────────────────────────────────────────────────────────
 
   private async queryContributors(
-    eventId: string,
+    tx: TenantTx,
     filters: ReportFilters,
     resolvedGroupId?: string,
   ): Promise<
@@ -320,9 +327,8 @@ export class ReportService {
       _inKind: string[];
     }[]
   > {
-    const people = await this.prisma.person.findMany({
+    const people = await tx.person.findMany({
       where: {
-        eventId,
         ...(filters.searchTerm
           ? { displayName: { contains: filters.searchTerm, mode: 'insensitive' } }
           : {}),

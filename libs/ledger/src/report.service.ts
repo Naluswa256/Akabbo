@@ -19,14 +19,18 @@ export interface ReportFilters {
   searchTerm?: string;
   sortField?: 'amount' | 'name';
   sortDirection?: 'asc' | 'desc';
-  /** How many rows to return. Defaults to MAX_LIMIT — i.e. everything, up to
-   *  the safety cap — so a single call always has the full answer with no
-   *  "call once to learn the total, call again for everyone" round-trip.
-   *  Pass a smaller value only if a deliberately short list is wanted. */
+  /** How many rows to return. Defaults to MAX_LIMIT — i.e. genuinely
+   *  everything, no pagination, regardless of event size (confirmed: never
+   *  truncate — 500 contributors means 500 rows back) — so a single call
+   *  always has the full answer with no "call once to learn the total, call
+   *  again for everyone" round-trip. Pass a smaller value only if a
+   *  deliberately short list is wanted. */
   limit?: number;
 }
 
-const MAX_LIMIT = 200;
+/** Not a product limit — every real event's data comes back in full. This is
+ *  purely a technical ceiling against a malformed/malicious `limit` value. */
+const MAX_LIMIT = 10000;
 const DEFAULT_LIMIT = MAX_LIMIT;
 
 export interface ReportPreviewRow {
@@ -181,11 +185,12 @@ export class ReportService {
         });
       }
     } else {
-      // PAYMENTS — recent fulfillments
+      // PAYMENTS — every fulfillment, most recent first (no pagination — see
+      // MAX_LIMIT: never truncate, regardless of event size).
       const fulfillments = await this.prisma.fulfillment.findMany({
         where: { eventId },
         orderBy: { occurredAt: 'desc' },
-        take: 500,
+        take: MAX_LIMIT,
         select: {
           id: true,
           value: true,

@@ -343,6 +343,12 @@ export class AssistantService {
         if (pendingId) staged.push(pendingId);
         if (reportRef) reportRefs.push(reportRef);
         if (call.name === 'query_event_report') {
+          // TEMP DIAGNOSTIC (remove with the other DIAG lines once closed):
+          // the model has twice claimed a report "returned empty" after a
+          // single successful-looking call — need the actual response body,
+          // not just the call args, to know if that's a real backend bug or
+          // the model misdescribing real data.
+          this.logger.warn(`DIAG report_result ${content.slice(0, 800)}`);
           try {
             if ((JSON.parse(content) as { isComplete?: boolean }).isComplete === true) {
               reportAlreadyComplete = true;

@@ -269,6 +269,15 @@ export class AssistantService {
     const staged: string[] = [];
     const reportRefs: ReportRef[] = [];
     const allToolCalls: unknown[] = [];
+    // Circuit breaker: telling the model in the prompt AND in-band in the
+    // tool result that a report is already complete did not reliably stop it
+    // from calling query_event_report/get_event_overview again anyway
+    // (confirmed from production logs — repeated redundant calls burning
+    // through MAX_STEPS without ever answering). Once a report tool returns
+    // everything for this turn, enforce it in code: any further call to
+    // either tool this turn gets a short redirect instead of being re-run.
+    let reportAlreadyComplete = false;
+    const REPORT_TOOLS = new Set(['query_event_report', 'get_event_overview']);
 
     for (let step = 1; step <= MAX_STEPS; step += 1) {
       const result = await this.llm.complete({ messages, tools, temperature: 0 });
@@ -314,9 +323,34 @@ export class AssistantService {
       const toolResults: LlmToolResult[] = [];
       for (const call of result.toolCalls) {
         allToolCalls.push({ name: call.name, args: call.arguments });
+
+        if (reportAlreadyComplete && REPORT_TOOLS.has(call.name)) {
+          toolResults.push({
+            id: call.id,
+            name: call.name,
+            content: JSON.stringify({
+              redirected: true,
+              instruction:
+                'You already have the complete contributor/pledge data from an earlier call this turn — ' +
+                'calling this again will not return anything new. Stop calling tools and write your final ' +
+                'reply now, listing every row from that earlier result.',
+            }),
+          });
+          continue;
+        }
+
         const { content, pendingId, reportRef } = await dispatch(call.name, call.arguments);
         if (pendingId) staged.push(pendingId);
         if (reportRef) reportRefs.push(reportRef);
+        if (call.name === 'query_event_report') {
+          try {
+            if ((JSON.parse(content) as { isComplete?: boolean }).isComplete === true) {
+              reportAlreadyComplete = true;
+            }
+          } catch {
+            // Malformed/non-JSON content — nothing to flag, fall through.
+          }
+        }
         toolResults.push({ id: call.id, name: call.name, content });
       }
       messages.push({ role: 'tool', content: '', toolResults });

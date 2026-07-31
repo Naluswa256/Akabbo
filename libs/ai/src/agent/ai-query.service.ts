@@ -140,6 +140,8 @@ export class AiQueryService {
         pledgeStatus: 'PLEDGED' | 'PARTIALLY_PAID' | 'FULLY_PAID' | 'NO_PLEDGE';
         paymentCount: number;
         byMethod: { method: string; total: string }[];
+        /** In-kind pledges (ITEM/SERVICE — "5 kg of meat"), one per pledge. */
+        inKind: string[];
       }
   > {
     this.permissions.assert(ctx.event.role, 'ledger:read_amounts');
@@ -178,6 +180,14 @@ export class AiQueryService {
         ORDER BY total DESC
       `;
 
+      // In-kind pledges (ITEM/SERVICE) live in `description`, not the money
+      // fields — without this, "how much meat has X pledged" always reads 0.
+      const inKindRows = await tx.pledge.findMany({
+        where: { personId, status: { not: 'CANCELLED' }, type: { not: 'CASH' } },
+        select: { description: true },
+      });
+      const inKind = inKindRows.map((p) => p.description).filter((d): d is string => !!d);
+
       const pledgeStatus =
         committed === 0n
           ? 'NO_PLEDGE'
@@ -196,6 +206,7 @@ export class AiQueryService {
         pledgeStatus,
         paymentCount,
         byMethod: methods.map((m) => ({ method: m.method, total: moneyToString(m.total) })),
+        inKind,
       };
     });
   }

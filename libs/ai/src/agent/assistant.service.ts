@@ -1659,10 +1659,12 @@ const SYSTEM_PROMPT = [
   '1. Full Name — UGX amount ✅',
   '2. Full Name — UGX amount 🅿️',
   '3. Full Name — UGX amount 🅿️ (UGX amount outstanding)',
+  '4. Full Name — UGX amount 🅿️ + 5 kg of meat, 100 cartons of water',
   '',
   '✅ = fully paid (received covers the full pledge). ' +
     '🅿️ = pledged but not fully received — nothing received yet, or add the outstanding ' +
-    'amount in parentheses when partially paid.',
+    'amount in parentheses when partially paid. Append any inKind entries after the cash ' +
+    'figure (line 4) — never drop them just because the cash amount is small or 0.',
   '',
   'After the numbered list, add ONE short summary line with the totals (received / ' +
     'pledged / outstanding, and budget gap if relevant) — do not lead with a header block ' +
@@ -1673,22 +1675,15 @@ const SYSTEM_PROMPT = [
     '("how much has X paid") stays a plain sentence per §37 — do not wrap one person in a ' +
     'numbered list.',
   '',
-  'CRITICAL — when the user explicitly asks for "all"/"everyone"/"the full list"/"comprehensive", ' +
-    'or gives an exact count ("all 14 contributors"), call query_event_report with `limit` set to ' +
-    'totalRecords (or ~100) and then LIST EVERY ONE of them in the numbered list. Do not stop at 5 ' +
-    'and point to filterUrl instead — the user asked YOU, in chat, for the data; a link to a page ' +
-    'they have to go open is not an answer. filterUrl is a bonus for later, never a substitute.',
-  '',
-  'For a quick, unqualified glance ("who\'s outstanding", "progress report" with no "all"/"everyone" ' +
-    'wording), the default 5-row preview is fine — but never present it as if it were complete. If ' +
-    'what you have is fewer rows than totalRecords, say so — e.g. "Showing 5 of 14 contributors:" ' +
-    'before the list, or "...and 9 more — ask for \'all\' to see everyone" after it.',
+  'query_event_report returns everyone by default (up to 200) in ONE call — list every row it ' +
+    'gives you in the numbered list. Never mention filterUrl or send the user to a report page ' +
+    'instead of answering — they asked you, in chat; a link is not an answer.',
   '',
   'Different phrasings of the same underlying question ("progress report" vs "everyone who has ' +
     'pledged" vs "show contributors with totals") are NOT the same question — re-call the ' +
-    'appropriate tool with parameters matching what was actually asked (reportType/status/limit) ' +
+    'appropriate tool with parameters matching what was actually asked (reportType/status filters) ' +
     'rather than reusing a prior turn\'s snapshot. Two differently-worded questions returning ' +
-    'byte-identical output is a sign the wrong tool, wrong filters, or wrong limit were used.',
+    'byte-identical output is a sign the wrong tool or wrong filters were used.',
   '',
   '============================================================',
   '40. FINAL OPERATING PRINCIPLE',
@@ -1735,7 +1730,7 @@ export const AGENT_TOOL_SPECS: LlmToolSpec[] = [
   {
     name: 'find_contributor',
     description:
-      "A named person's standing: committed, received, outstanding, pledge status, payment count and breakdown by method. Returns candidates if the name is ambiguous.",
+      "A named person's standing: committed, received, outstanding, pledge status, payment count, breakdown by method, AND inKind (their in-kind pledges — \"5 kg of meat\", etc, separate from the cash figures). Always mention inKind entries in your reply when present — a person can have pledged real value in items with 0 cash committed. Returns candidates if the name is ambiguous.",
     parameters: {
       type: 'object',
       properties: { name: { type: 'string' } },
@@ -1826,13 +1821,12 @@ export const AGENT_TOOL_SPECS: LlmToolSpec[] = [
       '(2) Use get_event_overview ONLY for a quick aggregate summary with no listing intent ("how are we doing") — its "top contributors" is a fixed top-5 snapshot, never a real answer to "show/list/everyone/all". ' +
       '(3) Use query_event_report for EVERYTHING ELSE that names or implies a list — "who hasn\'t paid", "show me the list", "everyone who has pledged", "progress report", "outstanding contributors", "bride side contributors", etc. ' +
       '(4) Use get_budget_item_funders for "who funded/paid for [a specific budget line]" — get_budget only has each item\'s total, not who it came from. ' +
-      'query_event_report returns: tier (INLINE_CHAT / MEDIUM_PREVIEW / LARGE_REPORT), totalRecords, totalAmount, up to `limit` rows, and a filterUrl for the frontend. ' +
-      'By default you get 5 rows — fine for a quick glance ("who\'s outstanding" with no further qualifier). ' +
-      'When the user explicitly asks for "all"/"everyone"/"the full list"/"comprehensive"/gives a count like "all 14", ' +
-      'ALWAYS pass `limit` set to totalRecords (or at least a generous number like 100) so the actual full data comes ' +
-      'back, and then LIST ALL OF IT in your reply — never respond with a 5-row teaser plus a link to a page the user ' +
-      'cannot see when they asked you directly. The filterUrl is a bonus for later, not a substitute for answering now. ' +
-      'If you only have a partial preview (limit was smaller than totalRecords), say so explicitly rather than presenting it as everyone. ' +
+      'query_event_report returns: tier (INLINE_CHAT / MEDIUM_PREVIEW / LARGE_REPORT), totalRecords, totalAmount, up to `limit` rows (default 200 — effectively everyone, in ONE call), and a filterUrl. ' +
+      'For CONTRIBUTORS/OUTSTANDING/PLEDGES rows, each may carry `inKind` — in-kind pledges ("5 kg of meat") separate from the cash `amount`; ALWAYS mention them when present, e.g. "Flavia Nsereko — UGX 40,000 🅿️ + 5 kg of meat, 100 cartons of water". ' +
+      'Always list every row you got back in your reply. Do NOT mention filterUrl or tell the user to go look at a report page — ' +
+      'you already have the actual data in front of you; a link is not an answer to a question asked directly in chat. ' +
+      'Only pass `limit` if you deliberately want a SHORT list (e.g. the user asked for "just the top 3"). ' +
+      'If totalRecords somehow exceeds what you got back (a very large event), say "showing N of TOTAL" — this should be rare. ' +
       'If ambiguousGroup is returned, ask the user which group they mean before proceeding. ' +
       'NEVER call list_contributors — it is retired.',
     parameters: {
@@ -1866,7 +1860,7 @@ export const AGENT_TOOL_SPECS: LlmToolSpec[] = [
         limit: {
           type: 'number',
           description:
-            'How many rows to return. Defaults to 5 (quick glance). Set to totalRecords (or ~100) when the user asked for "all"/"everyone"/a comprehensive list.',
+            'Omit this — defaults to everyone (up to 200) in one call. Only set it if you deliberately want a SHORTER list than the full one.',
         },
       },
     },

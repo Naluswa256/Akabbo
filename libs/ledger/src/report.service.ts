@@ -19,14 +19,15 @@ export interface ReportFilters {
   searchTerm?: string;
   sortField?: 'amount' | 'name';
   sortDirection?: 'asc' | 'desc';
-  /** How many rows to actually return inline. Defaults to 5 (a quick glance) —
-   *  pass a higher value (e.g. totalRecords) for "show me everyone"/"the full
-   *  list"/"comprehensive" requests. Capped at MAX_LIMIT regardless. */
+  /** How many rows to return. Defaults to MAX_LIMIT — i.e. everything, up to
+   *  the safety cap — so a single call always has the full answer with no
+   *  "call once to learn the total, call again for everyone" round-trip.
+   *  Pass a smaller value only if a deliberately short list is wanted. */
   limit?: number;
 }
 
-const DEFAULT_LIMIT = 5;
 const MAX_LIMIT = 200;
+const DEFAULT_LIMIT = MAX_LIMIT;
 
 export interface ReportPreviewRow {
   name: string;
@@ -34,6 +35,9 @@ export interface ReportPreviewRow {
   amount: string;
   outstanding?: string;
   status: string;
+  /** In-kind pledges (ITEM/SERVICE — "5 kg of meat", "100 cartons of water"),
+   *  one entry per pledge. Not reflected in `amount`, which is cash only. */
+  inKind?: string[];
 }
 
 export interface ReportRef {
@@ -150,6 +154,7 @@ export class ReportService {
           amount: moneyToString(r._received),
           outstanding: owed > 0n ? moneyToString(owed) : undefined,
           status: r._committed === 0n ? 'no_pledge' : r._received >= r._committed ? 'complete' : r._received > 0n ? 'partial' : 'unpaid',
+          inKind: r._inKind.length > 0 ? r._inKind : undefined,
         });
       }
     } else if (input.reportType === 'BUDGET') {
@@ -301,7 +306,14 @@ export class ReportService {
     filters: ReportFilters,
     resolvedGroupId?: string,
   ): Promise<
-    { id: string; displayName: string; groupName?: string; _committed: bigint; _received: bigint }[]
+    {
+      id: string;
+      displayName: string;
+      groupName?: string;
+      _committed: bigint;
+      _received: bigint;
+      _inKind: string[];
+    }[]
   > {
     const people = await this.prisma.person.findMany({
       where: {
@@ -323,6 +335,8 @@ export class ReportService {
         pledges: {
           where: { status: { not: 'CANCELLED' } },
           select: {
+            type: true,
+            description: true,
             committedValue: true,
             fulfillments: { select: { value: true } },
           },
@@ -333,9 +347,14 @@ export class ReportService {
     const rows = people.map((p) => {
       let committed = 0n;
       let received = 0n;
+      const inKind: string[] = [];
       for (const pl of p.pledges) {
         committed += pl.committedValue;
         for (const f of pl.fulfillments) received += f.value;
+        // In-kind pledges (ITEM/SERVICE) carry the real information in
+        // `description`, not the money fields — surface it as its own thing
+        // rather than letting it disappear into a cash total that may be 0.
+        if (pl.type !== 'CASH' && pl.description) inKind.push(pl.description);
       }
       return {
         id: p.id,
@@ -343,6 +362,7 @@ export class ReportService {
         groupName: p.groups[0]?.group.name,
         _committed: committed,
         _received: received,
+        _inKind: inKind,
       };
     });
 

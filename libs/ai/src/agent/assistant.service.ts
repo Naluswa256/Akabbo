@@ -1840,6 +1840,12 @@ export const AGENT_TOOL_SPECS: LlmToolSpec[] = [
       '(2) Use get_event_overview ONLY for a quick aggregate summary with no listing intent ("how are we doing") — its "top contributors" is a fixed top-5 snapshot, never a real answer to "show/list/everyone/all". ' +
       '(3) Use query_event_report for EVERYTHING ELSE that names or implies a list — "who hasn\'t paid", "show me the list", "everyone who has pledged", "progress report", "outstanding contributors", "bride side contributors", etc. ' +
       '(4) Use get_budget_item_funders for "who funded/paid for [a specific budget line]" — get_budget only has each item\'s total, not who it came from. ' +
+      'IMPORTANT: reportType CONTRIBUTORS, OUTSTANDING, and PLEDGES all return the EXACT SAME row shape — every ' +
+      'person with their committed (pledged), received, and outstanding amounts together, in one row each. They are ' +
+      'not different data sets to combine. "Show contributors and pledges", "everyone who has pledged", "contributor ' +
+      'list", "who has outstanding balances" are ALL answered by ONE call (reportType CONTRIBUTORS, optionally with ' +
+      '`status` to filter — outstanding/unpaid/etc). NEVER call this tool twice with different reportType values for ' +
+      'one question and try to merge the results — there is nothing to merge, a second call returns the same rows. ' +
       'query_event_report returns: tier (INLINE_CHAT / MEDIUM_PREVIEW / LARGE_REPORT), totalRecords, totalAmount, up to `limit` rows (default 200 — effectively everyone, in ONE call), and a filterUrl. ' +
       'For CONTRIBUTORS/OUTSTANDING/PLEDGES rows, each may carry `inKind` — in-kind pledges ("5 kg of meat") separate from the cash `amount`; ALWAYS mention them when present, e.g. "Flavia Nsereko — UGX 40,000 🅿️ + 5 kg of meat, 100 cartons of water". ' +
       'Always list every row you got back in your reply. Do NOT mention filterUrl or tell the user to go look at a report page — ' +
@@ -1855,7 +1861,7 @@ export const AGENT_TOOL_SPECS: LlmToolSpec[] = [
           type: 'string',
           enum: ['CONTRIBUTORS', 'OUTSTANDING', 'PLEDGES', 'BUDGET', 'PAYMENTS'],
           description:
-            'CONTRIBUTORS for general contributor list; OUTSTANDING to filter to those with balances; BUDGET for budget items; PAYMENTS for recent payments.',
+            'CONTRIBUTORS, OUTSTANDING, and PLEDGES return IDENTICAL rows (each person\'s committed + received + outstanding together) — use `status` to filter, not a different reportType. Default to CONTRIBUTORS. BUDGET for budget items; PAYMENTS for recent payments.',
         },
         status: {
           type: 'string',

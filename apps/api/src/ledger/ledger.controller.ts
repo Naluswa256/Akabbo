@@ -195,6 +195,16 @@ export class LedgerController {
     return this.budget.listItems(await this.ctx(actor, eventId));
   }
 
+  /** Who funded this budget line and how much each person put toward it. */
+  @Get('budget/items/:itemId/funders')
+  async budgetItemFunders(
+    @CurrentActor() actor: Actor,
+    @Param('eventId') eventId: string,
+    @Param('itemId') itemId: string,
+  ) {
+    return this.queries.getBudgetItemFundersById(await this.ctx(actor, eventId), itemId);
+  }
+
   @Post('budget/items')
   async addBudgetItem(
     @CurrentActor() actor: Actor,

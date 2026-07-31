@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { PledgeStatus } from '@prisma/client';
+import { PledgeStatus, Prisma } from '@prisma/client';
 import { OperationContext, PermissionService } from '@akabbo/access';
 import { PrismaService } from '@akabbo/prisma';
 import { TenantContext } from './tenant-context.service';
@@ -37,6 +37,17 @@ export interface TopContributor {
   received: string;
   outstanding: string;
 }
+
+export type BudgetItemFunders =
+  | { status: 'not_found' }
+  | { status: 'ambiguous'; candidates: string[] }
+  | {
+      status: 'resolved';
+      itemName: string;
+      target: string;
+      covered: string;
+      funders: { displayName: string; value: string; occurredAt: string }[];
+    };
 
 /** The full "how are we doing?" picture (§32, §40). Amounts — gated. */
 export interface EventReport {
@@ -234,6 +245,76 @@ export class LedgerQueryService {
         topContributors,
       };
     });
+  }
+
+  /**
+   * Who funded a specific budget line and how much each person put toward it.
+   * Allocations only ever store a total on the budget item itself — this is
+   * the explicit join (allocation → fulfillment → pledge → person) needed to
+   * answer "who funded catering", which nothing else surfaces.
+   */
+  async getBudgetItemFunders(ctx: OperationContext, itemName: string): Promise<BudgetItemFunders> {
+    this.permissions.assert(ctx.event.role, 'budget:read');
+    return this.tenant.runInEvent(ctx.event.eventId, async (tx) => {
+      const items = await tx.$queryRaw<{ id: string; name: string; target: bigint }[]>`
+        SELECT id, name, target_value::bigint AS target
+        FROM budget_item
+        WHERE lower(name) = lower(${itemName.trim()})
+      `;
+      if (items.length === 0) return { status: 'not_found' };
+      if (items.length > 1) {
+        return { status: 'ambiguous', candidates: items.map((i) => i.name) };
+      }
+      return this.fundersForItem(tx, items[0]);
+    });
+  }
+
+  /** Same as {@link getBudgetItemFunders} but resolved by id — the REST path,
+   *  where the frontend already has the item id from the list view and
+   *  name-based ambiguity doesn't apply. */
+  async getBudgetItemFundersById(
+    ctx: OperationContext,
+    itemId: string,
+  ): Promise<BudgetItemFunders> {
+    this.permissions.assert(ctx.event.role, 'budget:read');
+    return this.tenant.runInEvent(ctx.event.eventId, async (tx) => {
+      const item = await tx.budgetItem.findFirst({
+        where: { id: itemId },
+        select: { id: true, name: true, targetValue: true },
+      });
+      if (!item) return { status: 'not_found' };
+      return this.fundersForItem(tx, { id: item.id, name: item.name, target: item.targetValue });
+    });
+  }
+
+  private async fundersForItem(
+    tx: Prisma.TransactionClient,
+    item: { id: string; name: string; target: bigint },
+  ): Promise<BudgetItemFunders> {
+    const funders = await tx.$queryRaw<
+      { display_name: string; value: bigint; occurred_at: Date }[]
+    >`
+      SELECT p.display_name, a.value::bigint AS value, f.occurred_at
+      FROM allocation a
+      JOIN fulfillment f ON a.fulfillment_id = f.id
+      JOIN pledge pl ON f.pledge_id = pl.id
+      JOIN person p ON pl.person_id = p.id
+      WHERE a.budget_item_id = ${item.id}::uuid
+      ORDER BY f.occurred_at ASC
+    `;
+    const covered = funders.reduce((sum, f) => sum + f.value, 0n);
+
+    return {
+      status: 'resolved',
+      itemName: item.name,
+      target: moneyToString(item.target),
+      covered: moneyToString(covered),
+      funders: funders.map((f) => ({
+        displayName: f.display_name,
+        value: moneyToString(f.value),
+        occurredAt: f.occurred_at.toISOString(),
+      })),
+    };
   }
 
   /**

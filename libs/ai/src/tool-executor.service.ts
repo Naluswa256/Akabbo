@@ -39,6 +39,9 @@ export type StoredAction =
       type?: PledgeType;
       description?: string;
       phone?: string;
+      /** Links this pledge to a budget line it's meant to cover — resolved by
+       *  name to an id before staging; unset means it's outside the budget. */
+      budgetItemId?: string;
     }
   /** A pledge AND its first payment, atomically — see FulfillmentService
    *  .recordPledgeWithPayment for why this must not be two separate actions. */
@@ -51,6 +54,7 @@ export type StoredAction =
       type?: PledgeType;
       description?: string;
       phone?: string;
+      budgetItemId?: string;
     }
   | { tool: 'record_payment'; pledgeId: string; displayName: string; amount: string }
   /** A gift with no prior pledge (§15) — creates the commitment and discharges it.
@@ -64,6 +68,7 @@ export type StoredAction =
       phone?: string;
       type?: PledgeType;
       description?: string;
+      budgetItemId?: string;
     }
   /** A budget line proposed by document extraction, promoted on confirmation. */
   | { tool: 'create_budget_item'; name: string; targetValue: string; sourceDocumentId?: string }
@@ -168,6 +173,7 @@ export class ToolExecutor {
           action.type,
           action.phone,
           action.description,
+          action.budgetItemId,
         );
       case 'record_pledge_with_payment':
         return this.recordPledgeWithPayment(
@@ -180,6 +186,7 @@ export class ToolExecutor {
           action.type,
           action.phone,
           action.description,
+          action.budgetItemId,
         );
       case 'record_payment':
         return this.recordPayment(
@@ -199,6 +206,7 @@ export class ToolExecutor {
           action.phone,
           action.type,
           action.description,
+          action.budgetItemId,
         );
       case 'create_budget_item':
         return this.createBudgetItem(
@@ -387,6 +395,7 @@ export class ToolExecutor {
     type?: PledgeType,
     phone?: string,
     description?: string,
+    budgetItemId?: string,
   ): Promise<ExecutionResult> {
     const targetPersonId =
       personId ?? (await this.resolveOrCreatePerson(ctx, displayName, source, phone));
@@ -395,6 +404,7 @@ export class ToolExecutor {
       committedValue: amount,
       type,
       description,
+      targetBudgetItemId: budgetItemId,
       source,
     });
     const what = description ? ` (${description})` : '';
@@ -419,6 +429,7 @@ export class ToolExecutor {
     type?: PledgeType,
     phone?: string,
     description?: string,
+    budgetItemId?: string,
   ): Promise<ExecutionResult> {
     const targetPersonId =
       personId ?? (await this.resolveOrCreatePerson(ctx, displayName, source, phone));
@@ -428,6 +439,7 @@ export class ToolExecutor {
       receivedNow,
       type,
       description,
+      targetBudgetItemId: budgetItemId,
       source,
     });
     const what = description ? ` (${description})` : '';
@@ -469,6 +481,7 @@ export class ToolExecutor {
     phone?: string,
     type?: PledgeType,
     description?: string,
+    budgetItemId?: string,
   ): Promise<ExecutionResult> {
     if (!personId) {
       // Staged before the person existed — re-resolve now. If a pledge for
@@ -495,6 +508,7 @@ export class ToolExecutor {
       source,
       type,
       description,
+      targetBudgetItemId: budgetItemId,
       kind: type && type !== 'CASH' ? 'DELIVERY' : undefined,
     });
     const what = description ? ` (${description})` : '';

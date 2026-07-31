@@ -38,6 +38,8 @@ Returns every pledge in the event, newest first, each with its person and full s
     "quantity": null,
     "unit": null,
     "estimatedValue": null,
+    "targetBudgetItemId": null,
+    "targetBudgetItemName": null,
     "fulfillments": [
       {
         "id": "f001...",
@@ -55,9 +57,11 @@ Returns every pledge in the event, newest first, each with its person and full s
 
 `description`/`quantity`/`unit`/`estimatedValue` are only ever non-null when `type` is `ITEM` or `SERVICE` — see [FRONTEND_IN_KIND_CONTRIBUTIONS.md](FRONTEND_IN_KIND_CONTRIBUTIONS.md) for the full in-kind shape and how to render it.
 
+**`targetBudgetItemId`/`targetBudgetItemName` (new)** — set when this pledge/contribution is earmarked against a planned budget line (e.g. a "100 cartons of water" pledge linked to a "Water" budget item). Both null means it's outside the planned budget — a normal, valid state, not missing data. Set at creation time via `targetBudgetItemId` on `POST /events/:eventId/pledges` or `POST /events/:eventId/contributions`; there's no endpoint yet to link an existing pledge after the fact. See [FRONTEND_BUDGET_PANEL.md](FRONTEND_BUDGET_PANEL.md) §4c for the budget-item side of this (which pledges are linked to a given line).
+
 All money fields (`committedValue`, `outstanding`, each split's `value`) are **plain digit strings, integer minor units** (UGX has no minor units, so this is just the shillings amount) — format them for display yourself (thousands separators etc.), the API never adds formatting. No pagination yet — if an event has hundreds of pledges and this becomes slow, ask and we'll add `page`/`pageSize` matching the `report/contributors` endpoint's pattern.
 
-`type` is `CASH | ITEM | SERVICE`. In-kind pledges (`ITEM`/`SERVICE`) commonly have `committedValue: "0"` with the actual description elsewhere (not yet in this view — ask if the panel needs to show/edit in-kind detail too, that's a separate field set on `Pledge` we haven't wired into this endpoint).
+`type` is `CASH | ITEM | SERVICE`.
 
 ### Drilling into one person (new: `?personId=`)
 

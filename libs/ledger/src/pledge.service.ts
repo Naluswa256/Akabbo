@@ -66,6 +66,10 @@ export interface PledgeWithSplitsView extends PledgeView {
   quantity: number | null;
   unit: string | null;
   estimatedValue: string | null;
+  /** Budget line this pledge is earmarked to cover, if any — null means it's
+   *  outside the planned budget (a perfectly normal, valid state). */
+  targetBudgetItemId: string | null;
+  targetBudgetItemName: string | null;
 }
 
 /**
@@ -217,6 +221,8 @@ export class PledgeService {
           quantity: true,
           unit: true,
           estimatedValue: true,
+          targetBudgetItemId: true,
+          budgetItem: { select: { name: true } },
           person: { select: { displayName: true, phone: true } },
           fulfillments: {
             orderBy: { occurredAt: 'asc' },
@@ -249,6 +255,8 @@ export class PledgeService {
           quantity: p.quantity,
           unit: p.unit,
           estimatedValue: p.estimatedValue === null ? null : moneyToString(p.estimatedValue),
+          targetBudgetItemId: p.targetBudgetItemId,
+          targetBudgetItemName: p.budgetItem?.name ?? null,
           fulfillments: p.fulfillments.map((f) => ({
             id: f.id,
             value: moneyToString(f.value),

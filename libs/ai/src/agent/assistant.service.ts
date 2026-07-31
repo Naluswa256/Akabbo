@@ -1080,6 +1080,20 @@ const SYSTEM_PROMPT = [
   'Do not assume that total event funding automatically maps to individual budget items unless',
   'the backend defines that relationship.',
   '',
+  'RELATING AN ITEM PLEDGE/CONTRIBUTION TO A BUDGET LINE: the backend now defines this relationship. ' +
+    'When staging record_pledge or record_payment for an ITEM/SERVICE (in-kind) pledge or contribution, ' +
+    'check whether the description plausibly matches an existing budget line by topic — e.g. a "100 ' +
+    'cartons of water" pledge against a "Water" budget item. Call get_budget first if you do not already ' +
+    'know the current budget lines this turn. If there is a clear match, ASK the user whether to link it ' +
+    '("That sounds like it could cover the \'Water\' budget line — link it?") before staging — never link ' +
+    'silently or guess at a match that is not clearly the same thing. Only pass `budgetItemName` once the ' +
+    'user confirms (or if they named the budget line themselves in the first place). If nothing matches, ' +
+    'that is a completely normal, valid outcome — it just means the item is extra, outside the planned ' +
+    'budget; stage the pledge/contribution exactly as normal with no `budgetItemName`, never block or delay ' +
+    'recording it while waiting on a match. This is a real relationship in the data (Pledge.targetBudgetItemId) ' +
+    "— once linked, it shows up on that budget item's funder/pledge detail (get_budget_item_funders), " +
+    'distinct from money already allocated via allocate_to_budget.',
+  '',
   '============================================================',
   '13. DOCUMENTS AND IMAGES',
   '============================================================',
@@ -1757,9 +1771,14 @@ export const AGENT_TOOL_SPECS: LlmToolSpec[] = [
   {
     name: 'get_budget_item_funders',
     description:
-      'WHO funded a specific budget line and how much each person put toward it — use for "who funded catering", ' +
-      '"who paid for the certificates". get_budget only has the item\'s total coverage, not who it came from; this ' +
-      'is the tool for that. Returns each funder\'s name, the amount they put toward THIS item, and when.',
+      'Full detail on a specific budget line: WHO funded it (money already allocated) AND which pledges/contributions ' +
+      'are earmarked for it, whether fulfilled yet or not. Use for "who funded catering", "who paid for the ' +
+      'certificates", "what\'s covering the water budget", "is anything pledged for X". get_budget only has the ' +
+      'item\'s total coverage, not who it came from or what\'s promised toward it; this is the tool for that. Returns ' +
+      '`funders` (name, amount, when — money already received and allocated) and `linkedPledges` (person, type, ' +
+      'description, committedValue, status — pledges targeting this item via budgetItemName, which may not have any ' +
+      'money moved yet). These are different things: a pledge can appear in linkedPledges long before it ever shows ' +
+      'up in funders.',
     parameters: {
       type: 'object',
       properties: { itemName: { type: 'string', description: 'Existing budget item name.' } },
@@ -1893,6 +1912,10 @@ export const AGENT_TOOL_SPECS: LlmToolSpec[] = [
           type: 'string',
           description: 'Optional — amount already paid toward this pledge, e.g. "200000" or "200k".',
         },
+        budgetItemName: {
+          type: 'string',
+          description: 'Existing budget item name this pledge is meant to cover, e.g. "Water" — only pass this if the user said so, or after you suggested a match and they confirmed it. Never guess/assume a link.',
+        },
       },
       required: ['personName', 'amount'],
     },
@@ -1916,6 +1939,10 @@ export const AGENT_TOOL_SPECS: LlmToolSpec[] = [
         description: {
           type: 'string',
           description: 'What the item/service is, for ITEM/SERVICE contributions.',
+        },
+        budgetItemName: {
+          type: 'string',
+          description: 'Existing budget item name this contribution is meant to cover, e.g. "Water" — only if the user said so or confirmed a suggested match.',
         },
       },
       required: ['personName', 'amount'],

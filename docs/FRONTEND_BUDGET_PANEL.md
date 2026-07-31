@@ -101,9 +101,9 @@ If the money was already recorded as a payment against an existing pledge (not a
 
 The organizer can say things like *"allocate John's payment to catering"* or *"put 200k of Sarah's money toward the venue"*. The AI resolves the named person's most recent payment that still has unallocated value left, stages the same allocation, and the confirm flow is identical to every other staged action. If they have no unallocated payment, or ask for more than what's left, the AI asks for clarification instead of guessing — you'll see that as a normal `clarification` chat response, not an error.
 
-### 4c. Reading back *who* funded a line (new)
+### 4c. Reading back *who* funded a line, and what's pledged toward it (new)
 
-Coverage alone (`covered: "140000"`) doesn't say who it came from — this is the endpoint for that, e.g. a "who paid for this" expand/tooltip on each budget row:
+Coverage alone (`covered: "140000"`) doesn't say who it came from, or what's been promised toward it but not yet paid — this is the endpoint for both, e.g. a "who's covering this" expand/tooltip on each budget row:
 
 ```http
 GET /events/:id/budget/items/:itemId/funders
@@ -111,18 +111,34 @@ GET /events/:id/budget/items/:itemId/funders
 ```json
 {
   "status": "resolved",
-  "itemName": "Certificates",
-  "target": "140000",
-  "covered": "140000",
+  "itemName": "Water",
+  "target": "500000",
+  "covered": "200000",
   "funders": [
-    { "displayName": "David Kabasi", "value": "140000", "occurredAt": "2026-07-29T10:15:00.000Z" }
+    { "displayName": "David Kabasi", "value": "200000", "occurredAt": "2026-07-29T10:15:00.000Z" }
+  ],
+  "linkedPledges": [
+    {
+      "personName": "Flavia Nsereko",
+      "type": "ITEM",
+      "description": "100 cartons of water",
+      "committedValue": "0",
+      "status": "PLEDGED"
+    }
   ]
 }
 ```
 
-`funders` is one row per payment allocated to this item (ordered oldest first) — a line funded by three different people shows three rows, and `covered` is their sum (matches the same figure `/report`'s `budget.items[].covered` already gives you). `status` is `"not_found"` if the item id doesn't exist in this event — no `"ambiguous"` case on this route since you're passing an id, not a name (the AI chat equivalent resolves by name and can hit that case; REST doesn't).
+Two different arrays, both about "what's covering this budget line" but not the same thing:
 
-Same capability is available to the AI chat now too (`get_budget_item_funders`) — "who funded X" / "who paid for X" now has a real answer instead of the generic "the system doesn't display that" response you may have seen before.
+- **`funders`** — money already received AND allocated (one row per payment credited to this item via `POST /events/:id/allocations`, §4a/4b). This is what drives `covered`/`status` on the item itself.
+- **`linkedPledges`** — pledges/contributions **earmarked** for this item (`Pledge.targetBudgetItemId`), regardless of whether anything has actually been paid/delivered yet. A pledge shows up here the moment it's linked, which can be long before (or entirely separate from) it ever becoming a `funders` row — e.g. Flavia's "100 cartons of water" pledge above is linked to the Water line but hasn't been delivered, so it's in `linkedPledges` with `committedValue: "0"` (no cash value stated) and does **not** appear in `funders` or affect `covered`. This is the answer to "is anything planned for this line" even before money moves.
+
+Pledges/contributions get linked to a budget item by passing `targetBudgetItemId` when recording them — `POST /events/:id/pledges` (new optional field) or `POST /events/:id/contributions` (§4a of this doc — same endpoint, now also accepts `targetBudgetItemId`). Optional, and there's no dedicated "link an existing pledge after the fact" endpoint yet, so set it at creation time. Not linked = a completely normal state (an "extra" item outside the planned budget), not an error. See [FRONTEND_CONTRIBUTIONS_PLEDGES_PANEL.md](FRONTEND_CONTRIBUTIONS_PLEDGES_PANEL.md) for the rest of the pledge-creation/editing flow.
+
+`status` is `"not_found"` if the item id doesn't exist in this event — no `"ambiguous"` case on this route since you're passing an id, not a name (the AI chat equivalent resolves by name and can hit that case; REST doesn't).
+
+Same capability is available to the AI chat now too (`get_budget_item_funders`) — "who funded X" / "what's covering the water line" now has a real answer instead of the generic "the system doesn't display that" response you may have seen before. In chat, the organizer can also just say something like *"Flavia pledged 100 cartons of water"* and the AI will suggest linking it to an existing "Water" budget line if one exists, asking for confirmation before linking — never silently.
 
 ---
 

@@ -52,6 +52,10 @@ export interface RecordDirectContributionInput {
   /** What an ITEM/SERVICE contribution actually is ("2 goats") — mirrors
    *  Pledge.description for in-kind pledges (§9.3). */
   description?: string;
+  /** Links this pledge to an existing budget line it's meant to cover — e.g.
+   *  a "100 cartons of water" contribution earmarked against a "Water"
+   *  budget item. Optional; unset means it's outside the planned budget. */
+  targetBudgetItemId?: string;
   idempotencyKey?: string;
   source?: ProvenanceSource;
 }
@@ -67,6 +71,8 @@ export interface RecordPledgeWithPaymentInput {
   /** What an ITEM/SERVICE pledge actually is ("5 kg of meat") — mirrors
    *  Pledge.description for in-kind pledges (§9.3). */
   description?: string;
+  /** Links this pledge to an existing budget line it's meant to cover. */
+  targetBudgetItemId?: string;
   method?: PaymentMethod;
   note?: string;
   idempotencyKey?: string;
@@ -212,6 +218,7 @@ export class FulfillmentService {
           type: input.type ?? PledgeType.CASH,
           committedValue: input.value,
           description: input.description ?? null,
+          targetBudgetItemId: input.targetBudgetItemId ?? null,
           status: PledgeStatus.PLEDGED, // recomputed to FULFILLED below
           isDirect: true,
           source,
@@ -294,6 +301,7 @@ export class FulfillmentService {
           type: input.type ?? PledgeType.CASH,
           committedValue: input.committedValue,
           description: input.description ?? null,
+          targetBudgetItemId: input.targetBudgetItemId ?? null,
           status: PledgeStatus.PLEDGED, // recomputed below once the payment (if any) lands
           source,
           createdById: ctx.actor.userId,

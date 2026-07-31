@@ -90,6 +90,7 @@ export class LedgerController {
       personId: dto.personId,
       committedValue: parseMoney(dto.committedValue),
       type: dto.type,
+      targetBudgetItemId: dto.targetBudgetItemId,
     });
   }
 
@@ -185,6 +186,7 @@ export class LedgerController {
       type: dto.type,
       note: dto.note,
       description: dto.description,
+      targetBudgetItemId: dto.targetBudgetItemId,
       idempotencyKey: dto.idempotencyKey,
     });
   }

@@ -36,6 +36,9 @@ export const recordPledgeArgs = z.object({
    *  both atomically as one pledge with one fulfillment against it, never two
    *  separate pledges — see FulfillmentService.recordPledgeWithPayment. */
   receivedNow: amountString.optional(),
+  /** Existing budget item name this pledge is meant to cover ("Water"). Only
+   *  when the user said so or confirmed a suggested match — never guessed. */
+  budgetItemName: z.string().min(1).max(200).optional(),
 });
 
 export const recordPaymentArgs = z.object({
@@ -48,6 +51,8 @@ export const recordPaymentArgs = z.object({
   type: z.enum(['CASH', 'ITEM', 'SERVICE']).optional(),
   /** What the item/service actually is, for ITEM/SERVICE contributions. */
   description: z.string().min(1).max(500).optional(),
+  /** Existing budget item name this contribution is meant to cover. */
+  budgetItemName: z.string().min(1).max(200).optional(),
 });
 
 export const getOutstandingArgs = z.object({
@@ -120,6 +125,10 @@ export const LLM_TOOL_SPECS = [
           type: 'string',
           description: 'Optional — amount already paid toward this pledge, integer minor units, digits only.',
         },
+        budgetItemName: {
+          type: 'string',
+          description: 'Existing budget item name this pledge covers, e.g. "Water" — only if the user said so or confirmed a suggested match.',
+        },
       },
       required: ['personName', 'amount'],
     },
@@ -137,6 +146,10 @@ export const LLM_TOOL_SPECS = [
         amount: { type: 'string', description: 'integer minor units, digits only' },
         type: { type: 'string', enum: ['CASH', 'ITEM', 'SERVICE'] },
         description: { type: 'string', description: 'What the item/service is, for ITEM/SERVICE.' },
+        budgetItemName: {
+          type: 'string',
+          description: 'Existing budget item name this contribution covers, e.g. "Water".',
+        },
       },
       required: ['personName', 'amount'],
     },

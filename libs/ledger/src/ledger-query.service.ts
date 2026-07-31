@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { PledgeStatus, Prisma } from '@prisma/client';
+import { PledgeStatus, PledgeType, Prisma } from '@prisma/client';
 import { OperationContext, PermissionService } from '@akabbo/access';
 import { PrismaService } from '@akabbo/prisma';
 import { TenantContext } from './tenant-context.service';
@@ -38,6 +38,15 @@ export interface TopContributor {
   outstanding: string;
 }
 
+export interface LinkedPledge {
+  personName: string;
+  type: PledgeType;
+  /** In-kind detail ("5 kg of meat") — null for CASH. */
+  description: string | null;
+  committedValue: string;
+  status: PledgeStatus;
+}
+
 export type BudgetItemFunders =
   | { status: 'not_found' }
   | { status: 'ambiguous'; candidates: string[] }
@@ -46,7 +55,13 @@ export type BudgetItemFunders =
       itemName: string;
       target: string;
       covered: string;
+      /** Money already allocated (from Fulfillment via Allocation). */
       funders: { displayName: string; value: string; occurredAt: string }[];
+      /** Pledges earmarked for this item (Pledge.targetBudgetItemId) —
+       *  promises/items, regardless of whether money has moved yet. Distinct
+       *  from `funders`: a pledge can be linked here long before (or without
+       *  ever) becoming an allocated fulfillment. */
+      linkedPledges: LinkedPledge[];
     };
 
 /** The full "how are we doing?" picture (§32, §40). Amounts — gated. */
@@ -304,6 +319,18 @@ export class LedgerQueryService {
     `;
     const covered = funders.reduce((sum, f) => sum + f.value, 0n);
 
+    const linked = await tx.pledge.findMany({
+      where: { targetBudgetItemId: item.id },
+      select: {
+        type: true,
+        description: true,
+        committedValue: true,
+        status: true,
+        person: { select: { displayName: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
     return {
       status: 'resolved',
       itemName: item.name,
@@ -313,6 +340,13 @@ export class LedgerQueryService {
         displayName: f.display_name,
         value: moneyToString(f.value),
         occurredAt: f.occurred_at.toISOString(),
+      })),
+      linkedPledges: linked.map((p) => ({
+        personName: p.person.displayName,
+        type: p.type,
+        description: p.description,
+        committedValue: moneyToString(p.committedValue),
+        status: p.status,
       })),
     };
   }

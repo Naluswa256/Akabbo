@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { PledgeType, ProvenanceSource } from '@prisma/client';
 import { Action, OperationContext, PermissionService } from '@akabbo/access';
 import { LLM_PROVIDER, LlmProvider } from '@akabbo/providers';
+import { TenantContext } from '@akabbo/ledger';
 import { EntityResolver } from './entity-resolver.service';
 import { ToolExecutor, StoredAction, ExecutionResult } from './tool-executor.service';
 import { ConfirmationService } from './confirmation.service';
@@ -903,7 +904,30 @@ export class CaptureService {
     private readonly executor: ToolExecutor,
     private readonly confirmations: ConfirmationService,
     private readonly meter: UsageMeter,
+    private readonly tenant: TenantContext,
   ) {}
+
+  /**
+   * Case-insensitive exact-name lookup for linking a pledge/contribution to a
+   * budget line (mirrors AiMutationService.resolveBudgetItem's query shape).
+   * Deliberately non-blocking: linking is a bonus, never required to record
+   * a pledge — 0 or 2+ matches just means it stages with no link, no
+   * clarification round-trip.
+   */
+  private async resolveBudgetItemId(
+    eventId: string,
+    name: string | undefined,
+  ): Promise<string | undefined> {
+    if (!name) return undefined;
+    const rows = await this.tenant.runInEvent(
+      eventId,
+      (tx) =>
+        tx.$queryRaw<{ id: string }[]>`
+        SELECT id FROM budget_item WHERE lower(name) = lower(${name.trim()})
+      `,
+    );
+    return rows.length === 1 ? rows[0].id : undefined;
+  }
 
   async capture(ctx: OperationContext, utterance: string): Promise<CaptureResult> {
     // Tier 1: deterministic ($0). High confidence by construction.
@@ -1075,6 +1099,10 @@ export class CaptureService {
 
     // record_pledge / record_payment both start by resolving the person.
     const name = call.args.personName;
+    const budgetItemId = await this.resolveBudgetItemId(
+      ctx.event.eventId,
+      call.args.budgetItemName,
+    );
     const person = await this.resolver.resolvePerson(ctx.event.eventId, name);
     if (person.status === 'none') {
       if (call.tool === 'record_pledge') {
@@ -1089,6 +1117,7 @@ export class CaptureService {
               receivedNow,
               type: call.args.type as PledgeType | undefined,
               description: call.args.description,
+              budgetItemId,
             },
             prompt: `Add ${name} as a contributor, record their pledge of ${formatAmount(call.args.amount)}, and ${formatAmount(receivedNow)} already received?`,
           };
@@ -1101,6 +1130,7 @@ export class CaptureService {
             amount: call.args.amount,
             type: call.args.type as PledgeType | undefined,
             description: call.args.description,
+            budgetItemId,
           },
           prompt: `Add ${name} as a contributor and record their pledge of ${formatAmount(call.args.amount)}?`,
         };
@@ -1113,6 +1143,7 @@ export class CaptureService {
           amount: call.args.amount,
           type: call.args.type as PledgeType | undefined,
           description: call.args.description,
+          budgetItemId,
         },
         prompt: `Add ${name} as a contributor and record their contribution of ${formatAmount(call.args.amount)}?`,
       };
@@ -1134,6 +1165,7 @@ export class CaptureService {
             receivedNow,
             type: call.args.type as PledgeType | undefined,
             description: call.args.description,
+            budgetItemId,
           },
           prompt: `Record ${person.displayName}'s pledge of ${formatAmount(call.args.amount)}, with ${formatAmount(receivedNow)} already received?`,
         };
@@ -1147,6 +1179,7 @@ export class CaptureService {
           amount: call.args.amount,
           type: call.args.type as PledgeType | undefined,
           description: call.args.description,
+          budgetItemId,
         },
         prompt: `Record ${person.displayName}'s pledge of ${formatAmount(call.args.amount)}?`,
       };
@@ -1167,6 +1200,7 @@ export class CaptureService {
           amount: call.args.amount,
           type: call.args.type as PledgeType | undefined,
           description: call.args.description,
+          budgetItemId,
         },
         prompt: `Record ${person.displayName}'s contribution of ${formatAmount(call.args.amount)}?`,
       };

@@ -99,6 +99,12 @@ export class CreatePledgeDto {
   @IsOptional()
   @IsEnum(PledgeType)
   type?: PledgeType;
+
+  /** Links this pledge to a budget line it's meant to cover (e.g. an item
+   *  pledge of "100 cartons of water" against a "Water" budget item). */
+  @IsOptional()
+  @IsString()
+  targetBudgetItemId?: string;
 }
 
 export class CorrectPledgeDto {
@@ -211,6 +217,11 @@ export class RecordDirectContributionDto {
   @IsString()
   @Length(1, 500)
   description?: string;
+
+  /** Links this contribution to a budget line it's meant to cover. */
+  @IsOptional()
+  @IsString()
+  targetBudgetItemId?: string;
 
   @IsOptional()
   @IsString()

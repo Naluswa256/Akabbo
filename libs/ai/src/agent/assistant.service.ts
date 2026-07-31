@@ -272,6 +272,12 @@ export class AssistantService {
 
     for (let step = 1; step <= MAX_STEPS; step += 1) {
       const result = await this.llm.complete({ messages, tools, temperature: 0 });
+      // TEMP DIAGNOSTIC (remove once the MAX_STEPS/stale-report investigation
+      // is closed): confirms whether the model is calling a tool at all vs.
+      // answering from conversation memory, and with what args.
+      this.logger.warn(
+        `DIAG step=${step} toolCalls=${result.toolCalls.map((c) => `${c.name}(${JSON.stringify(c.arguments)})`).join(',') || 'NONE'} textLen=${(result.text ?? '').length}`,
+      );
       const eventId = meterEventId();
       if (eventId) {
         await this.meter.recordLlmCall(eventId, result.usage, costMicroUsd(result.usage), {

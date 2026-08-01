@@ -1,5 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { BadRequestException, Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnModuleInit,
+} from '@nestjs/common';
 import { PrismaService } from '@akabbo/prisma';
 import {
   LLM_PROVIDER,
@@ -417,6 +424,18 @@ export class BudgetKnowledgeService implements OnModuleInit {
       collectedAt: s.collectedAt,
       observationCount: s._count.observations,
     }));
+  }
+
+  /** For the admin panel: one source plus every observation extracted from
+   *  it — the "review what actually got extracted" view listSources' count
+   *  alone can't provide. */
+  async getSourceDetail(sourceId: string) {
+    const source = await this.prisma.budgetKnowledgeSource.findUnique({
+      where: { id: sourceId },
+      include: { observations: { orderBy: { category: 'asc' } } },
+    });
+    if (!source) throw new NotFoundException(`No budget-knowledge source with id ${sourceId}`);
+    return source;
   }
 
   private async queryObservations(

@@ -330,4 +330,34 @@ describe('Budget intelligence — pre-budgeting (integration)', () => {
     const filtered = await service.listSources({ sourceType: BudgetKnowledgeSourceType.admin_upload });
     expect(filtered.every((s) => s.sourceType === BudgetKnowledgeSourceType.admin_upload)).toBe(true);
   });
+
+  it('getSourceDetail returns one source with every observation it produced', async () => {
+    const { sourceId } = await service.ingestObservations(
+      {
+        sourceType: BudgetKnowledgeSourceType.manual_entry,
+        name: 'detail-test-source',
+        reliability: BudgetKnowledgeReliability.HIGH,
+        licensingNote: 'test',
+        extractionMethod: BudgetKnowledgeExtractionMethod.manual,
+      },
+      [
+        {
+          eventType: 'funeral',
+          category: 'Coffin',
+          amountMin: 500_000n,
+          amountMax: 2_000_000n,
+          confidence: 0.8,
+          observedAt: new Date(),
+        },
+      ],
+    );
+    const detail = await service.getSourceDetail(sourceId);
+    expect(detail.name).toBe('detail-test-source');
+    expect(detail.observations).toHaveLength(1);
+    expect(detail.observations[0].category).toBe('Coffin');
+
+    await expect(service.getSourceDetail('00000000-0000-0000-0000-000000000000')).rejects.toThrow(
+      /No budget-knowledge source/,
+    );
+  });
 });

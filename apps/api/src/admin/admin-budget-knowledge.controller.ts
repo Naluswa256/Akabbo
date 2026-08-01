@@ -1,4 +1,4 @@
-import { Body, Controller, ForbiddenException, Get, Headers, Post, Query } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, Headers, Param, Post, Query } from '@nestjs/common';
 import { BudgetKnowledgeSourceType } from '@prisma/client';
 import { BudgetKnowledgeService } from '@akabbo/budget-intelligence';
 import { UploadBudgetKnowledgeDto } from './admin-budget-knowledge.dto';
@@ -63,5 +63,13 @@ export class AdminBudgetKnowledgeController {
       eventType,
       limit: limit ? Number(limit) : undefined,
     });
+  }
+
+  /** One source plus every observation extracted from it — what "review this
+   *  upload" opens into. */
+  @Get('sources/:id')
+  async getSource(@Param('id') id: string, @Headers('x-akabbo-admin-secret') secret?: string) {
+    this.assertAdminSecret(secret);
+    return this.budgetKnowledge.getSourceDetail(id);
   }
 }

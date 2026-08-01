@@ -144,6 +144,15 @@
       "compilerOptions": {
         "tsConfigPath": "libs/comms/tsconfig.lib.json"
       }
+    },
+    "budget-intelligence": {
+      "type": "library",
+      "root": "libs/budget-intelligence",
+      "entryFile": "index",
+      "sourceRoot": "libs/budget-intelligence/src",
+      "compilerOptions": {
+        "tsConfigPath": "libs/budget-intelligence/tsconfig.lib.json"
+      }
     }
   }
 }

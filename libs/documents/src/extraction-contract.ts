@@ -102,6 +102,16 @@ export const EXTRACT_BUDGET_TOOL = {
         description:
           'Brief extraction notes regarding quality, missing totals, or unusual layout quirks observed.',
       },
+      inferred_event_type: {
+        type: 'string',
+        description:
+          'Best guess at the event type this budget is for (e.g. "kwanjula", "church_wedding", "funeral"), based on the item names/context. Leave blank if unclear — used only to enrich Akabbo\'s general budget-knowledge base, never to change how this document\'s own line items are recorded.',
+      },
+      inferred_region: {
+        type: 'string',
+        description:
+          'Best guess at the Uganda region/city this budget is for, only if stated or strongly implied (e.g. "Kampala"). Leave blank if not stated.',
+      },
     },
     required: ['items'],
   },
@@ -132,6 +142,8 @@ export const extractBudgetResult = z.object({
     .default([]),
   confidence: z.number().min(0).max(1).optional(),
   notes: z.string().optional(),
+  inferred_event_type: z.string().optional(),
+  inferred_region: z.string().optional(),
 });
 
 export type ExtractBudgetResult = z.infer<typeof extractBudgetResult>;

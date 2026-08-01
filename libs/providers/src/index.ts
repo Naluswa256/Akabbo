@@ -28,3 +28,8 @@ export * from './storage/gcs-storage.provider';
 // Auth (Phase 1)
 export * from './auth/auth.provider';
 export * from './auth/stub-auth.provider';
+
+// Search (budget intelligence)
+export * from './search/search.provider';
+export * from './search/stub-search.provider';
+export * from './search/tavily-search.provider';

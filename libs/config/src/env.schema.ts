@@ -100,6 +100,11 @@ export const envSchema = z
       .positive()
       .default(25 * 1024 * 1024),
     AUTH_PROVIDER: z.string().default('local'),
+    // Budget intelligence (pre-budgeting, not part of the original 6-phase
+    // plan). 'stub' (default) | 'tavily' (real live search, once its key is
+    // set). Skipped entirely — no search happens — until both are set.
+    SEARCH_PROVIDER: z.string().default('stub'),
+    SEARCH_API_KEY: z.string().optional().default(''),
   })
   // Production hardening: never boot prod with dev-grade auth (§8 fail-closed).
   .superRefine((env, ctx) => {

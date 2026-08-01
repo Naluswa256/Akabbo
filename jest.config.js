@@ -46,5 +46,7 @@ module.exports = {
     '^@akabbo/billing/(.*)$': '<rootDir>/libs/billing/src/$1',
     '^@akabbo/comms$': '<rootDir>/libs/comms/src',
     '^@akabbo/comms/(.*)$': '<rootDir>/libs/comms/src/$1',
+    '^@akabbo/budget-intelligence$': '<rootDir>/libs/budget-intelligence/src',
+    '^@akabbo/budget-intelligence/(.*)$': '<rootDir>/libs/budget-intelligence/src/$1',
   },
 };

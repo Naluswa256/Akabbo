@@ -11,3 +11,4 @@ export const SMS_PROVIDER = Symbol('SmsProvider');
 export const PAYMENT_PROVIDER = Symbol('PaymentProvider');
 export const STORAGE_PROVIDER = Symbol('StorageProvider');
 export const AUTH_PROVIDER = Symbol('AuthProvider');
+export const SEARCH_PROVIDER = Symbol('SearchProvider');

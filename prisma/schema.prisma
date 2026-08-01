@@ -124,6 +124,10 @@ enum ProvenanceSource {
   ai_from_payment_sms
   manual_correction
   import
+  /// A pre-budgeting recommendation the organizer accepted or edited before
+  /// confirming — distinct from ai_from_chat (transcribing what a human
+  /// explicitly said): this is the AI proposing something nobody stated.
+  ai_suggested
 }
 
 enum OutboxStatus {
@@ -1240,4 +1244,117 @@ model AiLearnedExemplar {
   @@index([category])
   @@index([status])
   @@map("ai_learned_exemplar")
+}
+
+// ─── Budget Intelligence (pre-budgeting) ──────────────────────────────────────
+// Not part of the original 6-phase plan — added to help someone who hasn't
+// started an event yet figure out what to budget for. Deliberately GLOBAL,
+// non-tenant data: a category/price pattern isn't owned by one event, so
+// these tables carry no event_id and sit outside RLS entirely — NON-RLS
+// (platform-level, like `plan`).
+
+/// What kind of source an observation came from. `public_article` covers both
+/// a manually curated blog post AND one found by a live search mid-
+/// conversation — that distinction is captured by extractionMethod below, not
+/// a separate source type.
+enum BudgetKnowledgeSourceType {
+  manual_entry
+  public_article
+  user_upload
+  akabbo_aggregate
+  /// An admin-vetted upload of a real person's real budget (Word doc, Excel
+  /// sheet, or a screenshot/photo) — a deliberately curated, higher-trust
+  /// source, distinct from an organizer's own incidental per-event upload
+  /// (`user_upload`, unreviewed) and from a hand-typed fact (`manual_entry`,
+  /// no source document at all).
+  admin_upload
+}
+
+enum BudgetKnowledgeReliability {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+/// How much human review this source's observations had before landing here.
+/// `ai_extraction_live` (found live, or pulled from a user's own upload)
+/// never gets a curator review pass — the organizer who triggered it sees the
+/// result immediately and can challenge/edit it before anything touches the
+/// real ledger, which is the review, just a conversational one instead of a
+/// curator's.
+enum BudgetKnowledgeExtractionMethod {
+  manual
+  ai_extraction_reviewed
+  ai_extraction_live
+}
+
+enum BudgetTier {
+  budget
+  mid
+  premium
+}
+
+/// A single place we're willing to learn budget patterns/prices from —
+/// curator-picked, live-search-found, or a user's own uploaded budget. Scribd
+/// and similar UGC platforms are deliberately never a valid source here
+/// (their own terms prohibit using their content to build an AI system's
+/// knowledge, scraped or not) — `licensingNote` exists so every row states,
+/// in plain language, why it's safe to use.
+model BudgetKnowledgeSource {
+  id               String                          @id @default(uuid()) @db.Uuid
+  sourceType       BudgetKnowledgeSourceType       @map("source_type")
+  name             String
+  url              String?
+  publishedAt      DateTime?                       @map("published_at")
+  collectedAt      DateTime                        @default(now()) @map("collected_at")
+  reliability      BudgetKnowledgeReliability
+  licensingNote    String                          @map("licensing_note")
+  extractionMethod BudgetKnowledgeExtractionMethod @map("extraction_method")
+  /// Set only for admin_upload sources — the original file, preserved the
+  /// same way a per-event Document's original is (never replaced by its
+  /// extraction), retrievable only via the admin surface.
+  storageKey       String?                         @map("storage_key")
+  originalFilename String?                         @map("original_filename")
+  mimeType         String?                         @map("mime_type")
+  createdAt        DateTime                        @default(now()) @map("created_at")
+
+  observations BudgetKnowledgeObservation[]
+
+  @@map("budget_knowledge_source")
+}
+
+/// One normalized fact: "for this event type, in this region/tier, this
+/// category tends to cost/appear like this." Never a copy of a source
+/// document's own line items — always a fact distilled from one, which is
+/// what keeps this legally clean and keeps a single stale/wrong source from
+/// reading as an authoritative price. Null `amountMin`/`amountMax` means a
+/// pattern-only row (the category shows up, no price attached) — e.g. a
+/// "commonly forgotten" item with no stated cost.
+model BudgetKnowledgeObservation {
+  id                String      @id @default(uuid()) @db.Uuid
+  sourceId          String      @map("source_id") @db.Uuid
+  /// Free text, not an enum — event type is deliberately not hardcoded
+  /// anywhere else in this schema either (a kwanjula and a funeral shouldn't
+  /// need a migration to both be representable).
+  eventType         String      @map("event_type")
+  /// Null = Uganda-wide baseline; a flat regional adjustment, not
+  /// per-district precision we have no real data to back up.
+  region            String?
+  tier              BudgetTier?
+  category          String
+  item              String?
+  amountMin         BigInt?     @map("amount_min")
+  amountMax         BigInt?     @map("amount_max")
+  unit              String?
+  commonlyForgotten Boolean     @default(false) @map("commonly_forgotten")
+  confidence        Float
+  /// The fact's own as-of date (usually the source's publishedAt) — drives
+  /// staleness weighting at recommendation time, independent of createdAt.
+  observedAt        DateTime    @map("observed_at")
+  createdAt         DateTime    @default(now()) @map("created_at")
+
+  source BudgetKnowledgeSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@index([eventType, region])
+  @@map("budget_knowledge_observation")
 }

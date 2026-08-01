@@ -11,6 +11,7 @@ import {
 } from '@akabbo/providers';
 import { ReportRef } from '@akabbo/ledger';
 import { LlmRateLimitedError } from '@akabbo/providers';
+import { BudgetKnowledgeService } from '@akabbo/budget-intelligence';
 import { CaptureService, CaptureResult } from '../capture.service';
 import { UsageMeter } from '../usage-meter.service';
 import { costMicroUsd } from '../pricing';
@@ -71,6 +72,7 @@ export class AssistantService {
     private readonly billing: BillingService,
     private readonly telemetry: TelemetryService,
     private readonly dynamicContext: DynamicContextService,
+    private readonly budgetKnowledge: BudgetKnowledgeService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -429,6 +431,30 @@ export class AssistantService {
                   },
                 }
               : { active: null, events: await session.listMyEvents() },
+          );
+        }
+        case 'get_budget_recommendation': {
+          // No active event required — this is the point (pre-budgeting
+          // usually happens BEFORE an event exists), and it reads global
+          // reference data, never anything tenant-scoped, so it skips
+          // this.dispatch()/OperationContext entirely.
+          const eventType = String(args.eventType ?? '').trim();
+          if (!eventType) {
+            return json({
+              status: 'clarification',
+              message: 'What kind of event is this for (e.g. kwanjula, church wedding, funeral)?',
+            });
+          }
+          return json(
+            await this.budgetKnowledge.getRecommendation({
+              eventType,
+              region: args.region ? String(args.region) : undefined,
+              guestCount: typeof args.guestCount === 'number' ? args.guestCount : undefined,
+              tier: args.tier as 'budget' | 'mid' | 'premium' | undefined,
+              existingCategories: Array.isArray(args.existingCategories)
+                ? args.existingCategories.map(String)
+                : undefined,
+            }),
           );
         }
         default: {
@@ -2262,6 +2288,36 @@ const SESSION_ONLY_TOOL_SPECS: LlmToolSpec[] = [
     name: 'get_active_event',
     description: "Get the conversation's currently active event (or null if none is selected yet).",
     parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'get_budget_recommendation',
+    description:
+      'Pre-budgeting: what should someone budget for, and roughly how much, BEFORE they have an event set up. Use for "what should I budget for a kwanjula", "how much does a wedding cost in Uganda", "what am I forgetting". ' +
+      'Works with no active event — this is usually the very first thing asked before create_event. Returns RANGES per category with a confidence label and source count, never a single precise figure — always present it as a starting point the user can freely change, never as a final answer. ' +
+      'Pass `existingCategories` (the items the user already listed) to also get `possiblyMissing` — commonly-forgotten items they have not mentioned yet; suggest them, never add them silently. ' +
+      'If `status` comes back "no_data", say so plainly rather than guessing a number yourself — every range this tool returns is computed from stored data, never invented.',
+    parameters: {
+      type: 'object',
+      properties: {
+        eventType: {
+          type: 'string',
+          description: 'e.g. "kwanjula", "church wedding", "funeral", "graduation party".',
+        },
+        region: { type: 'string', description: 'e.g. "Kampala" — optional.' },
+        guestCount: { type: 'number', description: 'Optional, for context in your reply.' },
+        tier: {
+          type: 'string',
+          enum: ['budget', 'mid', 'premium'],
+          description: 'Optional style/scale — "simple", "moderate", or "elaborate" map to these.',
+        },
+        existingCategories: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Categories the user already has in their draft, for gap-detection.',
+        },
+      },
+      required: ['eventType'],
+    },
   },
 ];
 

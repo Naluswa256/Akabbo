@@ -10,6 +10,9 @@ build/
 # Test / coverage
 coverage/
 
+# Local storage provider output (STORAGE_PROVIDER=local dev fallback)
+.akabbo-storage/
+
 # Env & secrets — NEVER commit real values
 .env
 .env.*

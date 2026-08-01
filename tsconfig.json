@@ -50,7 +50,9 @@
       "@akabbo/billing": ["libs/billing/src"],
       "@akabbo/billing/*": ["libs/billing/src/*"],
       "@akabbo/comms": ["libs/comms/src"],
-      "@akabbo/comms/*": ["libs/comms/src/*"]
+      "@akabbo/comms/*": ["libs/comms/src/*"],
+      "@akabbo/budget-intelligence": ["libs/budget-intelligence/src"],
+      "@akabbo/budget-intelligence/*": ["libs/budget-intelligence/src/*"]
     }
   },
   "exclude": ["node_modules", "dist"]

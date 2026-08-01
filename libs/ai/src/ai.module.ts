@@ -3,6 +3,7 @@ import { LedgerModule } from '@akabbo/ledger';
 import { TransparencyModule } from '@akabbo/transparency';
 import { CommsModule } from '@akabbo/comms';
 import { BillingModule } from '@akabbo/billing';
+import { BudgetIntelligenceModule } from '@akabbo/budget-intelligence';
 import { EntityResolver } from './entity-resolver.service';
 import { ToolExecutor } from './tool-executor.service';
 import { ConfirmationService } from './confirmation.service';
@@ -24,7 +25,7 @@ import { SelfLearningService } from './self-learning.service';
  * LLM_PROVIDER (global, from ProvidersModule).
  */
 @Module({
-  imports: [LedgerModule, TransparencyModule, CommsModule, BillingModule],
+  imports: [LedgerModule, TransparencyModule, CommsModule, BillingModule, BudgetIntelligenceModule],
   providers: [
     EntityResolver,
     ToolExecutor,

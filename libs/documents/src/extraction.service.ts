@@ -1,8 +1,17 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { DocumentStatus, Prisma, ProvenanceSource } from '@prisma/client';
+import {
+  BudgetKnowledgeExtractionMethod,
+  BudgetKnowledgeReliability,
+  BudgetKnowledgeSourceType,
+  DocumentStatus,
+  ExtractionKind,
+  Prisma,
+  ProvenanceSource,
+} from '@prisma/client';
 import { LLM_PROVIDER, LlmProvider } from '@akabbo/providers';
 import { TenantContext } from '@akabbo/ledger';
 import { StoredAction, UsageMeter, costMicroUsd, parseAmountToMinorUnits } from '@akabbo/ai';
+import { BudgetKnowledgeService } from '@akabbo/budget-intelligence';
 import { FileService } from './file.service';
 import {
   EXTRACTION_SYSTEM_PROMPT,
@@ -41,6 +50,7 @@ export class ExtractionService {
     private readonly tenant: TenantContext,
     private readonly files: FileService,
     private readonly meter: UsageMeter,
+    private readonly budgetKnowledge: BudgetKnowledgeService,
   ) {}
 
   async process(eventId: string, documentId: string): Promise<ExtractionResult> {
@@ -48,7 +58,7 @@ export class ExtractionService {
     const doc = await this.tenant.runInEvent(eventId, async (tx) => {
       const d = await tx.document.findFirst({
         where: { id: documentId },
-        select: { id: true, fileId: true, status: true, uploadedById: true },
+        select: { id: true, fileId: true, status: true, uploadedById: true, kind: true },
       });
       if (!d) return null;
       if (d.status !== DocumentStatus.UPLOADED) return null; // already handled
@@ -170,6 +180,48 @@ export class ExtractionService {
         });
         return normalized.length;
       });
+
+      // Best-effort: also feed Akabbo's shared budget-knowledge base
+      // (pre-budgeting) from this organizer's own budget — PII-free by
+      // construction (budget line items are category/amount data, never
+      // contributor names/phones) and gated to BUDGET-kind documents only,
+      // never CONTRIBUTION_LIST. Never blocks or fails the per-event
+      // extraction above, which has already completed by this point.
+      if (
+        doc.kind === ExtractionKind.BUDGET &&
+        parsed.success &&
+        parsed.data.inferred_event_type &&
+        normalized.length > 0
+      ) {
+        try {
+          await this.budgetKnowledge.ingestObservations(
+            {
+              sourceType: BudgetKnowledgeSourceType.user_upload,
+              name: `user-upload:${documentId}`,
+              reliability: BudgetKnowledgeReliability.LOW,
+              licensingNote:
+                "One organizer's own uploaded budget — a single anecdote, not a market survey. Disclosed via Akabbo's terms of service.",
+              extractionMethod: BudgetKnowledgeExtractionMethod.ai_extraction_live,
+            },
+            normalized.map((n) => ({
+              eventType: parsed.data.inferred_event_type as string,
+              region: parsed.data.inferred_region,
+              category: n.categoryContext ?? n.name,
+              item: n.categoryContext ? n.name : undefined,
+              amountMin: n.amount,
+              amountMax: n.amount,
+              // A single household's spending isn't a market survey — always
+              // low, regardless of how confident the extraction itself was.
+              confidence: 0.3,
+              observedAt: new Date(),
+            })),
+          );
+        } catch (err) {
+          this.logger.warn(
+            `Budget-knowledge ingestion skipped for document ${documentId}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
 
       return { documentId, status: DocumentStatus.REQUIRES_REVIEW, proposedItems };
     } catch (err) {

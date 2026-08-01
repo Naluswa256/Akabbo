@@ -45,6 +45,8 @@ spec:
               value: ugsms
             - name: PAYMENT_PROVIDER
               value: muda
+            - name: SEARCH_PROVIDER
+              value: tavily
             # --- UGSMS (SMS) ---
             - name: UGSMS_BASE_URL
               value: https://ugsms.com/api/v2
@@ -70,6 +72,11 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: akabbo-ugsms-api-key
+                  key: latest
+            - name: SEARCH_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: akabbo-tavily-api-key
                   key: latest
             - name: MUDA_CLIENT_ID
               valueFrom:

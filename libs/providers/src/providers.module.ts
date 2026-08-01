@@ -1,6 +1,12 @@
 import { Global, Module, Provider } from '@nestjs/common';
 import { AppConfigService } from '@akabbo/config';
-import { LLM_PROVIDER, PAYMENT_PROVIDER, SMS_PROVIDER, STORAGE_PROVIDER } from './tokens';
+import {
+  LLM_PROVIDER,
+  PAYMENT_PROVIDER,
+  SEARCH_PROVIDER,
+  SMS_PROVIDER,
+  STORAGE_PROVIDER,
+} from './tokens';
 import { LlmProvider } from './llm/llm.provider';
 import { StubLlmProvider } from './llm/stub-llm.provider';
 import { GeminiLlmProvider } from './llm/gemini-llm.provider';
@@ -16,6 +22,9 @@ import { StorageProvider } from './storage/storage.provider';
 import { StubStorageProvider } from './storage/stub-storage.provider';
 import { LocalStorageProvider } from './storage/local-storage.provider';
 import { GcsStorageProvider } from './storage/gcs-storage.provider';
+import { SearchProvider } from './search/search.provider';
+import { StubSearchProvider } from './search/stub-search.provider';
+import { TavilySearchProvider } from './search/tavily-search.provider';
 
 /**
  * Selects the real LLM provider from the env selector (Phase 2). Default 'stub'
@@ -105,11 +114,26 @@ function buildStorageProvider(config: AppConfigService): StorageProvider {
   return new StubStorageProvider();
 }
 
+/**
+ * Selects the web-search provider (budget intelligence). 'tavily' wires the
+ * real adapter when its API key is present; otherwise the stub. This is the
+ * one provider seam that reaches the open internet on the model's behalf, so
+ * it stays behind the exact same swappable-by-config discipline as every
+ * other vendor here.
+ */
+function buildSearchProvider(config: AppConfigService): SearchProvider {
+  if (config.get('SEARCH_PROVIDER') !== 'tavily') return new StubSearchProvider();
+  const apiKey = config.get('SEARCH_API_KEY');
+  if (!apiKey) return new StubSearchProvider();
+  return new TavilySearchProvider({ apiKey });
+}
+
 const providerBindings: Provider[] = [
   { provide: LLM_PROVIDER, useFactory: buildLlmProvider, inject: [AppConfigService] },
   { provide: SMS_PROVIDER, useFactory: buildSmsProvider, inject: [AppConfigService] },
   { provide: PAYMENT_PROVIDER, useFactory: buildPaymentProvider, inject: [AppConfigService] },
   { provide: STORAGE_PROVIDER, useFactory: buildStorageProvider, inject: [AppConfigService] },
+  { provide: SEARCH_PROVIDER, useFactory: buildSearchProvider, inject: [AppConfigService] },
 ];
 
 @Global()

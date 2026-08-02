@@ -698,8 +698,6 @@ export const EXTRACT_KNOWLEDGE_TOOL = {
   parameters: {
     type: 'object',
 
-    additionalProperties: false,
-
     properties: {
       eventType: {
         type: 'string',
@@ -715,8 +713,6 @@ export const EXTRACT_KNOWLEDGE_TOOL = {
 
         items: {
           type: 'object',
-
-          additionalProperties: false,
 
           properties: {
             category: {

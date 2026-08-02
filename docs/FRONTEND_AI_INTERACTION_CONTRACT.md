@@ -172,7 +172,7 @@ These are the capabilities behind the prose. You never call tools directly — b
 | `get_collected_in_period` | money in a date window | — |
 | `get_budget` | per-item coverage + gaps | `GET /events/:id/budget`, `/funding` |
 | `get_group_contributions` | totals per group/family side | — |
-| `get_public_link` | the shareable `/e/:slug` link (+token) | `GET /events/:id/public/settings` |
+| `get_public_link` | the shareable `/#/p/:slug` link (+token) | `GET /events/:id/public/settings` |
 
 ### Write tools (staged unless noted in §5)
 `add_person` (contributor), `record_pledge` (CASH/ITEM/SERVICE), `record_payment`, `add_budget_item`, `update_budget_item`, `remove_budget_item`, `correct_pledge`, `correct_payment`, `merge_people`, `create_group`, `assign_to_group`, `draft_announcement`, `publish_announcement`, `send_reminders`, `invite_member`.
@@ -207,8 +207,9 @@ These are the capabilities behind the prose. You never call tools directly — b
 
 `getPublicLink`:
 ```ts
-{ isPublic; slug; publicPath: "/e/<slug>[?t=…]"; publicUrl: string|null; tokenRequired; note? }
+{ isPublic; slug; publicPath: "/#/p/<slug>[?t=…]"; publicUrl: string|null; tokenRequired; note? }
 ```
+`publicPath` is a client-side (hash-routed) path, not a server route — `/e/:slug` (no hash) 404s when opened fresh, e.g. from an SMS link, since there's no server-side route for it.
 
 > **Money is always an integer-minor-units STRING** (e.g. `"200000"` = UGX 200,000; UGX has no decimals so minor units == shillings). Never parse to a JS `number` for maths — format for display only. Do **not** compute totals client-side; read them.
 

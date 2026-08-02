@@ -2295,7 +2295,8 @@ const SESSION_ONLY_TOOL_SPECS: LlmToolSpec[] = [
       'Pre-budgeting: what should someone budget for, and roughly how much, BEFORE they have an event set up. Use for "what should I budget for a kwanjula", "how much does a wedding cost in Uganda", "what am I forgetting". ' +
       'Works with no active event — this is usually the very first thing asked before create_event. Returns RANGES per category with a confidence label and source count, never a single precise figure — always present it as a starting point the user can freely change, never as a final answer. ' +
       'Pass `existingCategories` (the items the user already listed) to also get `possiblyMissing` — commonly-forgotten items they have not mentioned yet; suggest them, never add them silently. ' +
-      'If `status` comes back "no_data", say so plainly rather than guessing a number yourself — every range this tool returns is computed from stored data, never invented.',
+      'If `status` comes back "no_data", say so plainly rather than guessing a number yourself — every range this tool returns is computed from stored data, never invented. ' +
+      'When `instruction` is non-null, coverage is empty or thin — follow it exactly: present ONLY the categories/possiblyMissing actually returned, and do NOT round out the answer with categories, items, or prices from your own general knowledge, even ones you are confident are typical for this kind of event. Say plainly that Akabbo does not have data for something yet rather than filling the gap yourself.',
     parameters: {
       type: 'object',
       properties: {

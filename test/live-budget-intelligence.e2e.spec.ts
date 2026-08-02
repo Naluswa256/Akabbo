@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { AppConfigModule } from '@akabbo/config';
 import { PrismaModule, PrismaService } from '@akabbo/prisma';
@@ -68,6 +69,57 @@ if (LIVE) {
       for (const s of sources) {
         if (s.url) expect(s.url).not.toMatch(/scribd\.com|slideshare\.net|everand\.com/i);
       }
+    },
+    120_000,
+  );
+
+  it(
+    'kwanjula live search actually extracts real observations — catches schema-level API failures, not just "a row exists"',
+    async () => {
+      // This is the exact gap that let a real bug ship: the earlier version
+      // of this test only checked that A source row existed, which is also
+      // true when every single extraction call fails with a hard API error
+      // (Gemini's tools[].function_declarations[].parameters schema doesn't
+      // accept `additionalProperties` — a real 400 that was being silently
+      // swallowed into a "0 observations" outcome that reads identically to
+      // "the source was genuinely thin"). Spying on Logger.warn makes that
+      // failure mode fail this test directly instead of hiding in logs
+      // nobody re-checks after the fact.
+      const warnSpy = jest.spyOn(Logger.prototype, 'warn');
+      const result = await service.getRecommendation({
+        eventType: 'kwanjula',
+        region: 'Mbale',
+        guestCount: 300,
+      });
+      // eslint-disable-next-line no-console
+      console.log('\n[LIVE kwanjula recommendation] %o', result);
+
+      const extractionFailures = warnSpy.mock.calls
+        .map((args) => String(args[0]))
+        .filter((msg) => msg.includes('Knowledge extraction failed'));
+      // eslint-disable-next-line no-console
+      console.log('\n[LIVE extraction failures] %o', extractionFailures);
+      expect(extractionFailures).toEqual([]);
+      warnSpy.mockRestore();
+    },
+    120_000,
+  );
+
+  it(
+    'admin document upload against the real Gemini API — the exact call shape ingestFromDocument sends, unmocked',
+    async () => {
+      const result = await service.ingestFromDocument({
+        filename: 'live-test-budget.csv',
+        mimeType: 'text/csv',
+        data: Buffer.from('Item,Amount\nCatering,2500000\nVenue,4000000\n'),
+        eventTypeHint: 'wedding',
+        note: 'live e2e test fixture, not a real budget',
+      });
+      // eslint-disable-next-line no-console
+      console.log('\n[LIVE admin upload] %o', result);
+      // The real, meaningful assertion: Gemini actually accepted the tool
+      // schema and returned something, not that the call merely didn't throw.
+      expect(result.observationCount).toBeGreaterThan(0);
     },
     60_000,
   );

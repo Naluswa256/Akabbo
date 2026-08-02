@@ -139,7 +139,7 @@ roles, multi-currency, full device management, campaigns-as-marketing, on-contin
 
 **Two doorways, one ledger.** Uganda's contribution culture is transparent, so alongside the
 authenticated AI workspace there is a second, **unauthenticated read-only surface**: the
-shareable public event page (`/e/:slug`). Canonical data is unchanged; the public surface is
+shareable public event page (`/#/p/:slug` — the frontend is a hash-routed SPA, this is a client-side route, not a server path). Canonical data is unchanged; the public surface is
 a **deliberate projection** that never touches the write path.
 
 **Why the current architecture already supports it:** RLS here enforces *cross-event isolation

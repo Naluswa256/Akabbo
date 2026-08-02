@@ -204,7 +204,7 @@ describe('AI invite committee member + public link (integration)', () => {
     const link = await queries.getPublicLink(ctx);
     expect(link.isPublic).toBe(true);
     expect(link.slug).toBeTruthy();
-    expect(link.publicPath).toBe(`/e/${link.slug}`);
+    expect(link.publicPath).toBe(`/#/p/${link.slug}`);
     expect(link.tokenRequired).toBe(false);
   });
 });

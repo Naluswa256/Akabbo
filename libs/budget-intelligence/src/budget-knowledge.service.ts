@@ -6,10 +6,12 @@ import {
   Logger,
   NotFoundException,
   OnModuleInit,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { PrismaService } from '@akabbo/prisma';
 import {
   LLM_PROVIDER,
+  LlmCompletionResult,
   LlmProvider,
   SEARCH_PROVIDER,
   SearchProvider,
@@ -75,6 +77,12 @@ export interface BudgetRecommendationResult {
   /** Coarse "as of" (YYYY-MM) — never a false-precise day, per the never
    *  claim a verified current price rule. */
   asOf: string | null;
+  /** Set (non-null) whenever coverage is empty or thin — an explicit,
+   *  in-band directive not to fill the gap from the model's own knowledge.
+   *  System-prompt guidance alone wasn't reliable enough to stop this in an
+   *  earlier, unrelated report-truncation bug this session; putting the
+   *  instruction next to the data itself is what actually worked there. */
+  instruction: string | null;
 }
 
 export interface KnowledgeSourceInput {
@@ -189,6 +197,11 @@ export class BudgetKnowledgeService implements OnModuleInit {
         possiblyMissing: [],
         regionalNote: null,
         asOf: null,
+        instruction:
+          `Akabbo has NO data for "${eventType}" yet — not from curated sources, not from a live search. ` +
+          'Do NOT invent categories, items, or prices from your own general knowledge, even ones you are ' +
+          'confident are typical for this kind of event. Tell the user plainly that there is no data for ' +
+          'this yet, and ask if they want to build the budget from their own numbers instead.',
       };
     }
 
@@ -228,6 +241,8 @@ export class BudgetKnowledgeService implements OnModuleInit {
       null,
     );
 
+    const thin = categories.length < MIN_CATEGORIES_FOR_COVERAGE;
+
     return {
       status: 'resolved',
       eventType,
@@ -238,6 +253,13 @@ export class BudgetKnowledgeService implements OnModuleInit {
       possiblyMissing,
       regionalNote,
       asOf: mostRecent ? mostRecent.toISOString().slice(0, 7) : null,
+      instruction: thin
+        ? `Coverage for "${eventType}" is thin — only ${categories.length} categor${categories.length === 1 ? 'y' : 'ies'} of real data below. ` +
+          'Present ONLY what is in categories/possiblyMissing — do NOT add other categories, items, or ' +
+          'prices from your own general knowledge, even ones you are confident are typical for this event. ' +
+          "If you want to mention other likely categories, say plainly that Akabbo doesn't have pricing " +
+          'data for them yet rather than presenting a number for them.'
+        : null,
     };
   }
 
@@ -305,34 +327,70 @@ export class BudgetKnowledgeService implements OnModuleInit {
     const hintSuffix = input.eventTypeHint
       ? ` (admin says this is a ${input.eventTypeHint} budget${input.regionHint ? ` from ${input.regionHint}` : ''})`
       : '';
+    // The system prompt's "don't extract from what looks like one person's
+    // private budget, only general published guidance" rule exists to stop
+    // a live-search hit from laundering someone's leaked personal document
+    // into "market knowledge". It's exactly backwards here: an admin upload
+    // IS deliberately one real, consented person's specific budget — that's
+    // the entire value of this path, not a disqualifier. This override has
+    // to be explicit and in the user turn, not just implied, or the model
+    // applies the general rule and correctly-per-that-rule returns nothing.
+    const consentNote =
+      'This document was submitted directly by an Akabbo admin specifically because it is one real ' +
+      "person's real, consented budget — extract from it even though it's a specific private budget " +
+      'rather than general published guidance; the "exclude private budget documents" instruction does ' +
+      'not apply to this submission.';
     const tools = [{ ...EXTRACT_KNOWLEDGE_TOOL, parameters: { ...EXTRACT_KNOWLEDGE_TOOL.parameters } }];
 
-    const completion = isTextExtractable(input.mimeType)
-      ? await this.llm.complete({
-          messages: [
-            { role: 'system', content: KNOWLEDGE_EXTRACTION_SYSTEM_PROMPT },
-            {
-              role: 'user',
-              content: `Source: ${input.filename}${hintSuffix}\n\n${(await extractText(input.mimeType, input.data)).slice(0, 20_000)}`,
-            },
-          ],
-          tools,
-          temperature: 0,
-          toolChoice: 'required',
-        })
-      : await this.llm.complete({
-          messages: [
-            { role: 'system', content: KNOWLEDGE_EXTRACTION_SYSTEM_PROMPT },
-            { role: 'user', content: `Extract budget knowledge from the attached document.${hintSuffix}` },
-          ],
-          tools,
-          attachments: [{ mimeType: input.mimeType, data: input.data, filename: input.filename }],
-          temperature: 0,
-          toolChoice: 'required',
-        });
+    let completion: LlmCompletionResult;
+    try {
+      completion = isTextExtractable(input.mimeType)
+        ? await this.llm.complete({
+            messages: [
+              { role: 'system', content: KNOWLEDGE_EXTRACTION_SYSTEM_PROMPT },
+              {
+                role: 'user',
+                content: `Source: ${input.filename}${hintSuffix}\n${consentNote}\n\n${(await extractText(input.mimeType, input.data)).slice(0, 20_000)}`,
+              },
+            ],
+            tools,
+            temperature: 0,
+            toolChoice: 'required',
+          })
+        : await this.llm.complete({
+            messages: [
+              { role: 'system', content: KNOWLEDGE_EXTRACTION_SYSTEM_PROMPT },
+              {
+                role: 'user',
+                content: `Extract budget knowledge from the attached document.${hintSuffix}\n${consentNote}`,
+              },
+            ],
+            tools,
+            attachments: [{ mimeType: input.mimeType, data: input.data, filename: input.filename }],
+            temperature: 0,
+            toolChoice: 'required',
+          });
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Admin upload "${input.filename}": Gemini call failed — ${detail}`);
+      // The file is already preserved in storage above even though extraction
+      // failed — an admin can retry the extraction once the underlying issue
+      // is fixed, without re-uploading. A raw exception here would otherwise
+      // surface as an opaque 500 with no indication of what actually broke.
+      throw new ServiceUnavailableException(
+        `Extraction failed — the file was saved but nothing was extracted. Detail: ${detail.slice(0, 300)}`,
+      );
+    }
 
     const call = completion.toolCalls.find((c) => c.name === EXTRACT_KNOWLEDGE_TOOL.name);
     const parsed = extractKnowledgeResult.safeParse(call?.arguments ?? {});
+    if (!call) {
+      this.logger.warn(`Admin upload "${input.filename}": model returned no extract_knowledge tool call`);
+    } else if (!parsed.success) {
+      this.logger.warn(
+        `Admin upload "${input.filename}": tool call failed validation — ${parsed.error.message}`,
+      );
+    }
     const eventType = input.eventTypeHint || (parsed.success ? parsed.data.eventType : undefined);
     if (!eventType) {
       throw new BadRequestException(

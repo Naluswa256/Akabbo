@@ -78,7 +78,11 @@ export class AiQueryService {
       select: { slug: true, isPublic: true, publicAccessToken: true },
     });
     const query = event.publicAccessToken ? `?t=${event.publicAccessToken}` : '';
-    const publicPath = `/e/${event.slug}${query}`;
+    // The frontend is a hash-routed SPA — a raw `/e/:slug` path 404s when
+    // opened fresh (e.g. from an SMS link), since there's no server-side
+    // route for it, only a client-side one behind `#`. `/p/` is the
+    // frontend's actual route name for this page, not `/e/`.
+    const publicPath = `/#/p/${event.slug}${query}`;
     const base = this.config.get('PUBLIC_APP_URL');
     return {
       isPublic: event.isPublic,

@@ -211,6 +211,10 @@ These are the capabilities behind the prose. You never call tools directly — b
 ```
 `publicPath` is a client-side (hash-routed) path, not a server route — `/e/:slug` (no hash) 404s when opened fresh, e.g. from an SMS link, since there's no server-side route for it.
 
+**Making the link clickable when it comes back through chat.** `publicUrl` is now a real, complete `https://linktrust.app/#/p/<slug>` (backend has `PUBLIC_APP_URL` configured) — but `ChatResult` has no separate structured field for it the way it does for reports (`reportRefs`). The link only exists inside `reply`, the AI's free-form text, and the AI has been told to state the full `publicUrl` plainly (not markdown-wrapped, not truncated) specifically so a plain autolinker can catch it. That means the chat message renderer needs to actually autolink `https://` substrings in assistant messages — detect `https?://\S+`, wrap in `<a href="…" target="_blank" rel="noopener noreferrer">`, same as any normal chat product. Without that, the fix on the backend still renders as inert text. A hash fragment in the URL (`/#/p/…`) is a completely ordinary `href` target — no special escaping or handling needed.
+
+If a given screen needs a *guaranteed* clickable link rather than depending on chat prose — e.g. a dedicated "Share" button — call `GET /events/:id/public/settings` directly instead of parsing chat text; that's the same data, structured, with no dependency on how the model happened to phrase that turn.
+
 > **Money is always an integer-minor-units STRING** (e.g. `"200000"` = UGX 200,000; UGX has no decimals so minor units == shillings). Never parse to a JS `number` for maths — format for display only. Do **not** compute totals client-side; read them.
 
 ---

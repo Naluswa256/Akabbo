@@ -47,6 +47,8 @@ spec:
               value: muda
             - name: SEARCH_PROVIDER
               value: tavily
+            - name: PUBLIC_APP_URL
+              value: https://linktrust.app
             # --- UGSMS (SMS) ---
             - name: UGSMS_BASE_URL
               value: https://ugsms.com/api/v2

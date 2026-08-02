@@ -1916,7 +1916,8 @@ export const AGENT_TOOL_SPECS: LlmToolSpec[] = [
   {
     name: 'get_public_link',
     description:
-      'The event\'s public/shareable link — use for "give me the public link", "share the event". Returns the ready-to-share URL (or the path for the app to complete). Tells you if the public page is turned off.',
+      'The event\'s public/shareable link — use for "give me the public link", "share the event". Tells you if the public page is turned off. ' +
+      'If `publicUrl` is non-null, state that FULL absolute URL plainly in your reply (not wrapped in markdown link syntax, not truncated, not just the path) — the chat UI auto-links plain https:// URLs, and a bare path like "publicPath" alone is not clickable. Only fall back to describing `publicPath` if `publicUrl` is null.',
     parameters: { type: 'object', properties: {} },
   },
   {

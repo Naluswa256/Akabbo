@@ -166,6 +166,18 @@ There's no separate "delete a split" endpoint — if a split was recorded in err
 
 ---
 
+## 5. Scan a written list (`kind: "CONTRIBUTION_LIST"`) — now real
+
+The dependency the "Scan a written list" feature flagged is resolved: `Document.kind` used to be recorded but never actually consulted — every upload, regardless of declared kind, went through the budget-line extraction path. That's why an earlier real test of this exact flow came back as `Added budget item "Mbonye Emma" (20,000)` for each row instead of a pledge — the mechanism worked, the meaning was wrong. `CONTRIBUTION_LIST` now has its own real extraction contract and lands genuine pledge/payment proposals. Nothing about the request/poll/diff flow you already built needs to change — the fix is entirely server-side — but a few real behaviors to design around:
+
+- **Cards now read like pledge confirmations, not budget-item ones** — the same `prompt` text chat-based capture already produces (e.g. "I read Peter's pledge as UGX 1,500,000 — right?"), rendered by your existing `ActionPreview` cards exactly as before. An in-kind row ("Sarah — chairs") shows the item description in the card text, the same fix already in place for chat-staged in-kind pledges.
+- **Your diff-based counting is exactly right and doesn't need to change** — keep counting confirmed-new `PendingConfirmation` rows after the diff, not a raw "N found" number from the extraction. Not every row the model reads necessarily becomes a card: a name too ambiguous to resolve, or a row with no usable amount and no in-kind description, is skipped server-side rather than blocking the rest of the document. Today that skip is silent — the organizer sees fewer cards than rows on the page with no indication why. Worth knowing as a real v1 gap, not a bug in your diff logic, if you see counts not matching the photo.
+- **`FAILED` with nothing staged** now carries a specific message — `error: "No contributions could be read from this document"` — matching the graceful empty-result path you already built; still worth keeping your own generic fallback for any other `FAILED` reason.
+- **"paid" vs "pledged" on the page maps to direct-contribution vs pledge-only** — a row marked as already given routes toward an immediately-fulfilled record; a row read as promised-but-not-yet-given stages as a pledge with nothing paid. A row with no status mark at all is treated as unknown/pledge-only, never guessed as paid.
+- **Partial-payment context (e.g. "pledged 500,000, paid 200,000 so far") is captured but not yet surfaced to you** — the extraction preserves it in a `notes` field that isn't exposed through any endpoint the panel calls today. The staged card reflects the pledged amount. Ask if you want that detail visible on the card and we'll expose it.
+
+---
+
 ## Quick reference
 
 | Action | Endpoint |
@@ -177,5 +189,6 @@ There's no separate "delete a split" endpoint — if a split was recorded in err
 | Cancel a pledge | `POST /events/:eventId/pledges/:pledgeId/cancel` |
 | Add a new split | `POST /events/:eventId/fulfillments` |
 | Edit an existing split | `POST /events/:eventId/fulfillments/:fulfillmentId/correct` |
+| Scan a written list → staged pledges | `POST /events/:eventId/documents` (`kind: "CONTRIBUTION_LIST"`) → poll → diff pending |
 
 All money in/out is a plain digit string of integer minor units — never comma-formatted by the API, never floats.

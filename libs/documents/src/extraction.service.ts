@@ -9,8 +9,8 @@ import {
   ProvenanceSource,
 } from '@prisma/client';
 import { LLM_PROVIDER, LlmProvider } from '@akabbo/providers';
-import { TenantContext } from '@akabbo/ledger';
-import { StoredAction, UsageMeter, costMicroUsd, parseAmountToMinorUnits } from '@akabbo/ai';
+import { TenantContext, MembershipService } from '@akabbo/ledger';
+import { StoredAction, UsageMeter, costMicroUsd, parseAmountToMinorUnits, CaptureService } from '@akabbo/ai';
 import { BudgetKnowledgeService } from '@akabbo/budget-intelligence';
 import { FileService } from './file.service';
 import {
@@ -18,6 +18,12 @@ import {
   EXTRACT_BUDGET_TOOL,
   extractBudgetResult,
 } from './extraction-contract';
+import {
+  CONTRIBUTION_EXTRACTION_SYSTEM_PROMPT,
+  EXTRACT_CONTRIBUTIONS_TOOL,
+  ExtractedContributionEntry,
+  extractContributionsResult,
+} from './contribution-extraction-contract';
 
 export interface ExtractionResult {
   documentId: string;
@@ -25,21 +31,25 @@ export interface ExtractionResult {
   proposedItems: number;
 }
 
+type LoadedDoc = { id: string; fileId: string; status: DocumentStatus; uploadedById: string | null; kind: ExtractionKind };
+
 /**
  * Multimodal document extraction (blueprint §5, §6.1). Invoked by the WORKER
- * (async, §7) with the event scope from the outbox row. It:
- *   1. reads the document bytes and passes them to the LLM as an ATTACHMENT
- *      (data channel, never the system prompt — §10);
- *   2. records the raw structured reading as an append-only `extraction` row
- *      with provenance (model, confidence);
- *   3. lands each proposed budget line as a `pending_confirmation` — NOT
- *      canonical. A human promotes it via ConfirmationService, at which point a
- *      human is stamped into the provenance chain and the budget item is created
- *      with `ai_from_document` + a link back to the source document.
+ * (async, §7) with the event scope from the outbox row. Dispatches on
+ * `Document.kind`:
+ *   - BUDGET (and UNKNOWN, for backward compatibility): reads a photographed
+ *     budget, lands each line as a `pending_confirmation` for `create_budget_item`.
+ *   - CONTRIBUTION_LIST: reads a photographed contributor/pledge list, stages
+ *     each entry through the SAME natural-language capture pipeline chat uses
+ *     (CaptureService) — no separate entity-resolution or staging logic here,
+ *     it's the exact code path a human typing "Mbonye Emma paid 20,000" in
+ *     chat already goes through.
  *
- * An instruction embedded in the document cannot self-execute: the only tool the
- * model may call is `extract_budget`, and its output is a proposal a human must
- * approve.
+ * Nothing here is canonical. A human promotes each proposal via
+ * ConfirmationService, at which point a human is stamped into the provenance
+ * chain. An instruction embedded in the document cannot self-execute: the
+ * only tool the model may call is the extraction tool, and its output is
+ * always a proposal a human must approve.
  */
 @Injectable()
 export class ExtractionService {
@@ -51,6 +61,8 @@ export class ExtractionService {
     private readonly files: FileService,
     private readonly meter: UsageMeter,
     private readonly budgetKnowledge: BudgetKnowledgeService,
+    private readonly capture: CaptureService,
+    private readonly membership: MembershipService,
   ) {}
 
   async process(eventId: string, documentId: string): Promise<ExtractionResult> {
@@ -70,6 +82,17 @@ export class ExtractionService {
     });
     if (!doc) return { documentId, status: DocumentStatus.PROCESSED, proposedItems: 0 };
 
+    if (doc.kind === ExtractionKind.CONTRIBUTION_LIST) {
+      return this.processContributionList(eventId, documentId, doc);
+    }
+    return this.processBudget(eventId, documentId, doc);
+  }
+
+  private async processBudget(
+    eventId: string,
+    documentId: string,
+    doc: LoadedDoc,
+  ): Promise<ExtractionResult> {
     try {
       const file = await this.files.readBytes(eventId, doc.fileId);
 
@@ -225,15 +248,147 @@ export class ExtractionService {
 
       return { documentId, status: DocumentStatus.REQUIRES_REVIEW, proposedItems };
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'extraction failed';
-      this.logger.warn(`Extraction failed for document ${documentId}: ${message}`);
+      return this.fail(eventId, documentId, err);
+    }
+  }
+
+  private async processContributionList(
+    eventId: string,
+    documentId: string,
+    doc: LoadedDoc,
+  ): Promise<ExtractionResult> {
+    try {
+      if (!doc.uploadedById) {
+        throw new Error('Document has no uploader — cannot resolve who is staging these entries');
+      }
+      // The same actor/event context a live chat request would carry — the
+      // uploader IS the one "typing" these entries, just via a photo instead
+      // of a keyboard.
+      const eventContext = await this.membership.requireContext(
+        { userId: doc.uploadedById, phoneVerified: true },
+        eventId,
+      );
+      const ctx = { actor: { userId: doc.uploadedById, phoneVerified: true }, event: eventContext };
+
+      const file = await this.files.readBytes(eventId, doc.fileId);
+
+      const result = await this.llm.complete({
+        messages: [
+          { role: 'system', content: CONTRIBUTION_EXTRACTION_SYSTEM_PROMPT },
+          { role: 'user', content: 'Extract the contributor/pledge entries from the attached document.' },
+        ],
+        tools: [{ ...EXTRACT_CONTRIBUTIONS_TOOL, parameters: { ...EXTRACT_CONTRIBUTIONS_TOOL.parameters } }],
+        attachments: [{ mimeType: file.mimeType, data: file.body }],
+        temperature: 0,
+        toolChoice: 'required',
+      });
+
+      await this.meter.recordLlmCall(eventId, result.usage, costMicroUsd(result.usage), {
+        kind: 'document_extraction',
+        documentId,
+      });
+
+      const raw = result.toolCalls.find((c) => c.name === EXTRACT_CONTRIBUTIONS_TOOL.name);
+      const parsed = extractContributionsResult.safeParse(raw?.arguments ?? {});
+      const entries = parsed.success ? parsed.data.entries : [];
+
+      await this.tenant.runInEvent(eventId, (tx) =>
+        tx.extraction.create({
+          data: {
+            eventId,
+            documentId,
+            kind: 'CONTRIBUTION_LIST',
+            structured: { entries, notes: parsed.success ? parsed.data.notes : undefined } as unknown as Prisma.InputJsonValue,
+            model: result.usage.model,
+            itemCount: entries.length,
+          },
+        }),
+      );
+
+      // Stage each entry through the EXACT SAME pipeline a human typing in
+      // chat uses (tier1/tier2 parse → entity resolution → stage). No
+      // bespoke resolution/StoredAction logic here — an utterance built from
+      // a scanned row and one typed by a human are indistinguishable to
+      // CaptureService, which is the point: identical staging, identical
+      // ambiguous-name handling, identical confirm flow the frontend already
+      // renders as ActionPreview cards.
+      let staged = 0;
+      let skipped = 0;
+      for (const entry of entries) {
+        const utterance = buildUtterance(entry);
+        if (!utterance) {
+          skipped++;
+          continue;
+        }
+        try {
+          const captured = await this.capture.capture(ctx, utterance);
+          if (captured.type === 'pending') {
+            staged++;
+          } else {
+            skipped++;
+            this.logger.warn(
+              `Contribution-list entry not staged for document ${documentId} ("${entry.name}"): ${captured.type} — ${captured.message}`,
+            );
+          }
+        } catch (err) {
+          skipped++;
+          this.logger.warn(
+            `Contribution-list entry failed for document ${documentId} ("${entry.name}"): ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+
       await this.tenant.runInEvent(eventId, (tx) =>
         tx.document.update({
           where: { id: documentId },
-          data: { status: DocumentStatus.FAILED, error: message.slice(0, 500) },
+          data: {
+            status: staged > 0 ? DocumentStatus.REQUIRES_REVIEW : DocumentStatus.FAILED,
+            processedAt: new Date(),
+            error: staged === 0 ? 'No contributions could be read from this document' : null,
+          },
         }),
       );
-      return { documentId, status: DocumentStatus.FAILED, proposedItems: 0 };
+
+      this.logger.log(
+        `Contribution-list extraction for document ${documentId}: ${entries.length} read, ${staged} staged, ${skipped} skipped`,
+      );
+
+      return {
+        documentId,
+        status: staged > 0 ? DocumentStatus.REQUIRES_REVIEW : DocumentStatus.FAILED,
+        proposedItems: staged,
+      };
+    } catch (err) {
+      return this.fail(eventId, documentId, err);
     }
   }
+
+  private async fail(eventId: string, documentId: string, err: unknown): Promise<ExtractionResult> {
+    const message = err instanceof Error ? err.message : 'extraction failed';
+    this.logger.warn(`Extraction failed for document ${documentId}: ${message}`);
+    await this.tenant.runInEvent(eventId, (tx) =>
+      tx.document.update({
+        where: { id: documentId },
+        data: { status: DocumentStatus.FAILED, error: message.slice(0, 500) },
+      }),
+    );
+    return { documentId, status: DocumentStatus.FAILED, proposedItems: 0 };
+  }
+}
+
+/**
+ * Turns one extracted row into the same shape of sentence a human would type
+ * in chat — CaptureService's tier1/tier2 parsing does the rest. Returns null
+ * for an entry too thin to act on (no amount AND no in-kind description).
+ */
+function buildUtterance(entry: ExtractedContributionEntry): string | null {
+  const verb = entry.status === 'paid' ? 'paid' : entry.status === 'pledged' ? 'pledged' : 'gave';
+  if (entry.type === 'cash') {
+    if (!entry.amount) return null;
+    return `${entry.name} ${verb === 'gave' ? 'paid' : verb} ${entry.amount}`;
+  }
+  // item / service
+  if (!entry.description) return entry.amount ? `${entry.name} ${verb === 'gave' ? 'paid' : verb} ${entry.amount}` : null;
+  const what = entry.quantity ? `${entry.quantity}${entry.unit ? ` ${entry.unit}` : ''} of ${entry.description}` : entry.description;
+  return `${entry.name} ${verb} ${what}`;
 }

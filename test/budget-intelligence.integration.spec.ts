@@ -101,6 +101,33 @@ describe('Budget intelligence — pre-budgeting (integration)', () => {
     expect(result.possiblyMissing.length).toBeGreaterThan(0); // seeded commonlyForgotten rows
   });
 
+  it('a query with no region still returns region-tagged data — the real bug a real admin upload hit', async () => {
+    // Every observation from a real admin upload happened to be tagged with
+    // a region (wherever the family who shared the budget lives). Asking
+    // "what should I budget for a kwanjula" with no region mentioned must
+    // not silently filter all of that out — it previously did, because
+    // "no region requested" was implemented as "only show region-less rows"
+    // instead of "don't filter by region at all".
+    await service.ingestObservations(
+      {
+        sourceType: BudgetKnowledgeSourceType.admin_upload,
+        name: 'region-tagged-only-source',
+        reliability: BudgetKnowledgeReliability.HIGH,
+        licensingNote: 'test',
+        extractionMethod: BudgetKnowledgeExtractionMethod.ai_extraction_reviewed,
+      },
+      [
+        { eventType: 'kwanjula', region: 'mbale', category: 'Gifts', amountMin: 1_000_000n, amountMax: 1_000_000n, confidence: 0.9, observedAt: new Date() },
+        { eventType: 'kwanjula', region: 'mbale', category: 'Photography', amountMin: 1_500_000n, amountMax: 1_500_000n, confidence: 0.9, observedAt: new Date() },
+        { eventType: 'kwanjula', region: 'mbale', category: 'Transport', amountMin: 300_000n, amountMax: 300_000n, confidence: 0.9, observedAt: new Date() },
+      ],
+    );
+
+    const result = await service.getRecommendation({ eventType: 'kwanjula' }); // no region
+    expect(result.status).toBe('resolved');
+    expect(result.categories.map((c) => c.category).sort()).toEqual(['Gifts', 'Photography', 'Transport']);
+  });
+
   it('gap-detection excludes categories the organizer already has', async () => {
     await service.onModuleInit();
     const result = await service.getRecommendation({

@@ -523,8 +523,15 @@ export class BudgetKnowledgeService implements OnModuleInit {
       observedAt: r.observedAt,
       reliability: r.source.reliability,
     }));
+    // No region requested at all — "I don't know where" is not the same as
+    // "only show me the region-agnostic rows". Return everything we have;
+    // a real observation tagged to one region is still far better signal
+    // than nothing, and is exactly what happened here: 20 real, HIGH-
+    // reliability rows all tagged "mbale" were being silently excluded by
+    // this filter whenever the organizer's message didn't happen to name a
+    // region, which reads identically to "no data exists" from the outside.
+    if (!region) return all;
     const baseline = all.filter((r) => !r.region);
-    if (!region) return baseline;
     const regional = all.filter((r) => r.region && r.region === region);
     return regional.length > 0 ? [...regional, ...baseline] : baseline;
   }

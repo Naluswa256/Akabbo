@@ -313,49 +313,110 @@ export class ExtractionService {
       // ambiguous-name handling, identical confirm flow the frontend already
       // renders as ActionPreview cards.
       let staged = 0;
-      let skipped = 0;
+      // Track skip reasons separately so the final error message is accurate.
+      let duplicates = 0;   // already recorded — "A payment of X was already recorded"
+      let clarifications = 0; // ambiguous — needs human to pick a pledge
+      let unreadable = 0;   // buildUtterance returned null (no name/amount)
+      let otherSkipped = 0; // any other capture outcome
+
       for (const entry of entries) {
         const utterance = buildUtterance(entry);
         if (!utterance) {
-          skipped++;
+          unreadable++;
           continue;
         }
         try {
           const captured = await this.capture.capture(ctx, utterance);
           if (captured.type === 'pending') {
             staged++;
+          } else if (captured.type === 'clarification') {
+            clarifications++;
+            this.logger.warn(
+              `Contribution-list entry not staged for document ${documentId} ("${entry.name}"): ${captured.type} — ${captured.message}`,
+            );
           } else {
-            skipped++;
+            // 'executed' or any other non-pending type — check if it's a duplicate
+            const isDuplicate =
+              typeof captured.message === 'string' &&
+              captured.message.toLowerCase().includes('already recorded');
+            if (isDuplicate) {
+              duplicates++;
+            } else {
+              otherSkipped++;
+            }
             this.logger.warn(
               `Contribution-list entry not staged for document ${documentId} ("${entry.name}"): ${captured.type} — ${captured.message}`,
             );
           }
         } catch (err) {
-          skipped++;
+          const msg = err instanceof Error ? err.message : String(err);
+          const isDuplicate = msg.toLowerCase().includes('already recorded');
+          if (isDuplicate) {
+            duplicates++;
+          } else {
+            otherSkipped++;
+          }
           this.logger.warn(
-            `Contribution-list entry failed for document ${documentId} ("${entry.name}"): ${err instanceof Error ? err.message : String(err)}`,
+            `Contribution-list entry failed for document ${documentId} ("${entry.name}"): ${msg}`,
           );
         }
+      }
+
+      const totalSkipped = duplicates + clarifications + unreadable + otherSkipped;
+
+      // Build an accurate error/status based on WHY nothing staged.
+      //   - All duplicates  → FAILED + "already recorded" message (not a new failure)
+      //   - All/some clarifications with nothing staged → REQUIRES_REVIEW (human must pick)
+      //   - Genuinely unreadable → FAILED + unreadable message
+      let finalStatus: DocumentStatus;
+      let finalError: string | null = null;
+
+      if (staged > 0) {
+        finalStatus = DocumentStatus.REQUIRES_REVIEW;
+      } else if (clarifications > 0) {
+        // Nothing staged but there are clarification requests — needs human attention.
+        finalStatus = DocumentStatus.REQUIRES_REVIEW;
+        finalError =
+          `${clarifications} contribution${clarifications > 1 ? 's' : ''} need clarification` +
+          (duplicates > 0 ? `; ${duplicates} already recorded` : '') +
+          '. Open the chat to answer the pending questions.';
+      } else if (duplicates > 0 && unreadable === 0 && otherSkipped === 0) {
+        // Every entry was already recorded — this document was processed before.
+        finalStatus = DocumentStatus.FAILED;
+        finalError = `All ${duplicates} contribution${duplicates > 1 ? 's' : ''} in this document were already recorded. Upload a different photo or check your contributions list.`;
+      } else if (unreadable === entries.length) {
+        // Gemini read 0 usable rows — genuinely illegible.
+        finalStatus = DocumentStatus.FAILED;
+        finalError = 'No contributions could be read from this document. Try a clearer photo with better lighting.';
+      } else {
+        // Mixed failures with nothing staged.
+        const parts: string[] = [];
+        if (duplicates > 0) parts.push(`${duplicates} already recorded`);
+        if (clarifications > 0) parts.push(`${clarifications} need clarification`);
+        if (unreadable > 0) parts.push(`${unreadable} unreadable`);
+        if (otherSkipped > 0) parts.push(`${otherSkipped} could not be processed`);
+        finalStatus = DocumentStatus.FAILED;
+        finalError = `No contributions were staged: ${parts.join(', ')}.`;
       }
 
       await this.tenant.runInEvent(eventId, (tx) =>
         tx.document.update({
           where: { id: documentId },
           data: {
-            status: staged > 0 ? DocumentStatus.REQUIRES_REVIEW : DocumentStatus.FAILED,
+            status: finalStatus,
             processedAt: new Date(),
-            error: staged === 0 ? 'No contributions could be read from this document' : null,
+            error: finalError,
           },
         }),
       );
 
       this.logger.log(
-        `Contribution-list extraction for document ${documentId}: ${entries.length} read, ${staged} staged, ${skipped} skipped`,
+        `Contribution-list extraction for document ${documentId}: ${entries.length} read, ${staged} staged, ${totalSkipped} skipped (${duplicates} dup, ${clarifications} clarify, ${unreadable} unreadable, ${otherSkipped} other)`,
       );
 
       return {
         documentId,
-        status: staged > 0 ? DocumentStatus.REQUIRES_REVIEW : DocumentStatus.FAILED,
+        status: finalStatus,
         proposedItems: staged,
       };
     } catch (err) {

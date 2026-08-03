@@ -4,10 +4,21 @@ import { PrismaService } from '@akabbo/prisma';
 
 export interface UserView {
   id: string;
-  phone: string;
+  phone: string | null;
   phoneVerified: boolean;
+  email: string | null;
+  emailVerified: boolean;
   displayName: string | null;
 }
+
+const USER_VIEW_SELECT = {
+  id: true,
+  phone: true,
+  phoneVerified: true,
+  email: true,
+  emailVerified: true,
+  displayName: true,
+} as const;
 
 /**
  * Users (Identity & Access). The `user` table is global (not event-scoped), so
@@ -31,7 +42,7 @@ export class UserService {
     try {
       const created = await this.prisma.user.create({
         data: { phone },
-        select: { id: true, phone: true, phoneVerified: true, displayName: true },
+        select: USER_VIEW_SELECT,
       });
       return { ...created, isNew: true };
     } catch (err) {
@@ -40,7 +51,7 @@ export class UserService {
       }
       const existing = await this.prisma.user.findUniqueOrThrow({
         where: { phone },
-        select: { id: true, phone: true, phoneVerified: true, displayName: true },
+        select: USER_VIEW_SELECT,
       });
       return { ...existing, isNew: false };
     }
@@ -53,10 +64,42 @@ export class UserService {
     });
   }
 
+  /**
+   * Same optimistic-create/catch-P2002 pattern as {@link findOrCreateByPhone},
+   * mirrored for the email channel: the unique constraint on `email` is the
+   * arbiter for concurrent verifies of the same new address, not a separate
+   * check-then-create window.
+   */
+  async findOrCreateByEmail(email: string): Promise<UserView & { isNew: boolean }> {
+    try {
+      const created = await this.prisma.user.create({
+        data: { email },
+        select: USER_VIEW_SELECT,
+      });
+      return { ...created, isNew: true };
+    } catch (err) {
+      if (!(err instanceof Prisma.PrismaClientKnownRequestError) || err.code !== 'P2002') {
+        throw err;
+      }
+      const existing = await this.prisma.user.findUniqueOrThrow({
+        where: { email },
+        select: USER_VIEW_SELECT,
+      });
+      return { ...existing, isNew: false };
+    }
+  }
+
+  async markEmailVerified(userId: string): Promise<void> {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { emailVerified: true },
+    });
+  }
+
   async getById(userId: string): Promise<UserView | null> {
     return this.prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, phone: true, phoneVerified: true, displayName: true },
+      select: USER_VIEW_SELECT,
     });
   }
 }

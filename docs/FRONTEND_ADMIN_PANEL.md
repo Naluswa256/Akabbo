@@ -21,6 +21,8 @@ x-akabbo-admin-secret: <secret>
     "id": "987679d7-...",
     "phone": "+256701234567",
     "phoneVerified": true,
+    "email": null,
+    "emailVerified": false,
     "displayName": null,
     "createdAt": "2026-07-20T09:00:00.000Z",
     "planCode": "STARTER",
@@ -32,6 +34,7 @@ x-akabbo-admin-secret: <secret>
 ]
 ```
 
+- **New:** `email`/`emailVerified`, alongside `phone`/`phoneVerified` — accounts can now sign up via phone OTP or email OTP (see FRONTEND_PAYLOAD_EXAMPLES.md §1). Exactly one identity pair is ever populated per user today (`phone` set + `email: null`, or the reverse) — there's no account linking, so never assume both are present. Render whichever is non-null as the user's identifier.
 - `planStatus` is one of `TRIALING | ACTIVE | PAST_DUE | EXPIRED | CANCELLED`. **`TRIALING` = free trial, never paid. `ACTIVE` = currently paying.** That distinction is exactly "who's on free trial vs who's on a paid plan."
 - `planCode` is `FREE` for anyone with no billing account or no grant yet (most brand-new signups before they've done anything).
 - `aiBalance`/`smsBalance` reflect the user's canonical account-level balance (their oldest billing account, pooled with any event-scoped credits per event — same resolution logic used everywhere else in the app, not a simplified view).

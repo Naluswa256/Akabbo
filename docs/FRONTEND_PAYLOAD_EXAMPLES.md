@@ -10,11 +10,13 @@ Companion to **FRONTEND_AI_INTERACTION_CONTRACT.md**. Every request/response bel
 
 ---
 
-## 1. ONBOARDING (phone OTP → session)
+## 1. ONBOARDING (phone OTP or email OTP → session)
 
-Two steps. No passwords. A verified phone is required before the assistant will act.
+Two parallel, symmetric channels — **phone OTP (SMS via UGSMS)** and **email OTP (via Twilio's Email API, not SendGrid)**. Same two-step shape, same session response, same failure modes. No passwords, either way. Pick ONE flow in the UI (e.g. a "use phone" / "use email" toggle on the sign-in screen) — you don't need to support switching mid-flow.
 
-### 1.1 Start OTP
+**There is no account linking yet.** Signing up with email creates a user row with `email` set and `phone: null`; signing up with phone creates one with `phone` set and `email: null`. If the same person later authenticates with the *other* channel, they get a **second, separate account** — there is no "add a phone number to my email account" feature and no merge. If your product needs "the same person, either channel," that has to be built; don't assume it already works.
+
+### 1.1 Start OTP — phone
 ```http
 POST /auth/otp/start
 Content-Type: application/json
@@ -32,7 +34,7 @@ Content-Type: application/json
 - `devCode` is present **only in dev/staging** (so you can auto-fill during testing). In production it is absent — the code arrives by SMS. Never render it if missing.
 - Store `challengeId`; you need it for verify.
 
-### 1.2 Verify OTP
+### 1.2 Verify OTP — phone
 ```http
 POST /auth/otp/verify
 Content-Type: application/json
@@ -44,15 +46,38 @@ Content-Type: application/json
 {
   "userId": "usr_7a2b…",
   "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9…",
+  "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9…",
   "expiresAt": "2026-07-30T09:00:00.000Z"
 }
 ```
-- Persist `accessToken` + `expiresAt`; send the token on every authenticated request.
+- Persist `accessToken` + `refreshToken` + `expiresAt`; send `accessToken` on every authenticated request, use `refreshToken` at `POST /auth/refresh` (unchanged, channel-agnostic) once it's close to expiring.
 - **Do not** tie usage limits or "free trial remaining" to a fresh token — limits key off `userId`/`eventId` server-side; re-logging in resets nothing (by design).
 
-**Failure examples**
-- Wrong/expired code → `401 Unauthorized` (`{ "statusCode": 401, "message": "…" }`). Let the user retry or resend.
-- After verify, first action on the assistant with an unverified phone would be refused — but a successful verify sets `phoneVerified`, so this won't happen in the normal flow.
+### 1.3 Start OTP — email
+```http
+POST /auth/email-otp/start
+Content-Type: application/json
+
+{ "email": "joash@example.com" }
+```
+**200** — identical shape to 1.1: `{ challengeId, expiresInSeconds, devCode? }`. Malformed email → `400` with the standard class-validator error array.
+
+### 1.4 Verify OTP — email
+```http
+POST /auth/email-otp/verify
+Content-Type: application/json
+
+{ "challengeId": "c3f1e0a2-…", "code": "123456" }
+```
+**200** — identical shape to 1.2: `{ userId, accessToken, refreshToken, expiresAt }`.
+
+**The two verify endpoints are not interchangeable.** A `challengeId` from `/auth/otp/start` (phone) only ever verifies at `/auth/otp/verify`; a `challengeId` from `/auth/email-otp/start` only ever verifies at `/auth/email-otp/verify`. Presenting one at the other endpoint is rejected with the same generic `400` as an unknown/expired challenge (deliberately not distinguishable — don't try to parse the message to detect "wrong endpoint"). In practice this should never come up if you just call verify on the same endpoint pair you started on.
+
+**Failure examples (both channels)**
+- Wrong code → `401 Unauthorized` (`{ "statusCode": 401, "message": "Incorrect code" }`). Let the user retry.
+- 5 wrong attempts on the same challenge (`OTP_MAX_ATTEMPTS`) → permanently locked, even the correct code now gets `400 "Too many attempts"`. The user must start over (`/auth/otp/start` or `/auth/email-otp/start` again) — show a "request a new code" affordance rather than a bare error.
+- Starting a **second** challenge for the same phone/email while an unconsumed one is still outstanding → `400` ("A verification code was already sent — please wait a moment before requesting another."), for roughly 30 seconds after the first request. Surface this as "check your messages/inbox, or wait a moment" — **do not** auto-retry the start call yourself.
+- After verify, first action on the assistant with an unverified phone would be refused — but a successful verify sets `phoneVerified` (or `emailVerified`), so this won't happen in the normal flow.
 
 ---
 

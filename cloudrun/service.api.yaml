@@ -49,11 +49,16 @@ spec:
               value: tavily
             - name: PUBLIC_APP_URL
               value: https://linktrust.app
+            - name: EMAIL_PROVIDER
+              value: twilio
             # --- UGSMS (SMS) ---
             - name: UGSMS_BASE_URL
               value: https://ugsms.com/api/v2
             - name: UGSMS_SENDER_ID
               value: AKABBO
+            # --- Twilio (Email) ---
+            - name: EMAIL_FROM_ADDRESS
+              value: noreply@linktrust.app
             # --- Secrets from Secret Manager ---
             - name: DATABASE_URL
               valueFrom:
@@ -79,6 +84,16 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: akabbo-tavily-api-key
+                  key: latest
+            - name: TWILIO_ACCOUNT_SID
+              valueFrom:
+                secretKeyRef:
+                  name: akabbo-twilio-account-sid
+                  key: latest
+            - name: TWILIO_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: akabbo-twilio-auth-token
                   key: latest
             - name: MUDA_CLIENT_ID
               valueFrom:

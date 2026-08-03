@@ -303,9 +303,16 @@ enum SmsStatus {
 
 model User {
   id            String   @id @default(uuid()) @db.Uuid
-  /// E.164 phone — the primary credential. PII: never logged (§3.10).
-  phone         String   @unique
+  /// E.164 phone. Nullable — an account created via email OTP has no phone
+  /// until/unless they add one. PII: never logged (§3.10). Postgres treats
+  /// multiple NULLs as distinct, so many phone-less accounts coexist under
+  /// the same @unique constraint (same pattern as Person.userId elsewhere).
+  phone         String?  @unique
   phoneVerified Boolean  @default(false) @map("phone_verified")
+  /// Nullable for the same reason, opposite direction: an account created
+  /// via phone OTP has no email until/unless they add one.
+  email         String?  @unique
+  emailVerified Boolean  @default(false) @map("email_verified")
   displayName   String?  @map("display_name")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
@@ -329,10 +336,15 @@ model User {
   @@map("user")
 }
 
+/// Exactly one of phone / email is set per row — which channel a given
+/// challenge was issued for. Not a FK to User: a challenge exists
+/// independently of any account (the user is found-or-created only at
+/// verify time, same as the original phone-only design).
 model AuthOtpChallenge {
   id         String    @id @default(uuid()) @db.Uuid
   /// PII: never logged (§3.10).
-  phone      String
+  phone      String?
+  email      String?
   /// Hashed OTP — the plaintext code is never stored.
   codeHash   String    @map("code_hash")
   expiresAt  DateTime  @map("expires_at")
@@ -341,6 +353,7 @@ model AuthOtpChallenge {
   createdAt  DateTime  @default(now()) @map("created_at")
 
   @@index([phone])
+  @@index([email])
   @@map("auth_otp_challenge")
 }
 

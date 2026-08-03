@@ -88,7 +88,9 @@ export class AiMutationService {
     const target = members.find(
       (m) =>
         m.userId === targetUserIdOrPhone.trim() ||
-        (normalizedInput && m.user.phone.replace(/\D/g, '').includes(normalizedInput)),
+        (normalizedInput &&
+          m.user.phone &&
+          m.user.phone.replace(/\D/g, '').includes(normalizedInput)),
     );
 
     if (!target) {

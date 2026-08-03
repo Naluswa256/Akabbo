@@ -43,14 +43,17 @@
 
 ## 2. Authentication
 
-Phone OTP → JWT. No passwords.
+Phone OTP or email OTP → JWT. No passwords. Full request/response examples, failure modes, cooldown, and the channel guard are in [FRONTEND_PAYLOAD_EXAMPLES.md](FRONTEND_PAYLOAD_EXAMPLES.md) §1 — read that before building the sign-in screen.
 
 | Method & path | Auth | Body | Returns |
 |---|---|---|---|
 | `POST /auth/otp/start` | none | `{ phone: "+2567…" }` | `{ challengeId, expiresInSeconds, devCode? }` (`devCode` only in dev) |
-| `POST /auth/otp/verify` | none | `{ challengeId, code }` | `{ userId, accessToken, expiresAt }` |
+| `POST /auth/otp/verify` | none | `{ challengeId, code }` | `{ userId, accessToken, refreshToken, expiresAt }` |
+| `POST /auth/email-otp/start` | none | `{ email: "joash@example.com" }` | `{ challengeId, expiresInSeconds, devCode? }` (`devCode` only in dev) |
+| `POST /auth/email-otp/verify` | none | `{ challengeId, code }` | `{ userId, accessToken, refreshToken, expiresAt }` |
+| `POST /auth/refresh` | none | `{ refreshToken }` | `{ userId, accessToken, refreshToken, expiresAt }` |
 
-Send `Authorization: Bearer <accessToken>` on every authenticated call. A verified phone is required before the assistant will act.
+Send `Authorization: Bearer <accessToken>` on every authenticated call. A verified phone **or** verified email is required before the assistant will act — whichever channel the account signed up with. A `challengeId` from the phone `start` call only verifies at the phone `verify` endpoint, never the email one (and vice versa) — see the payload doc for the exact error behavior. Signing up via email vs phone creates separate accounts today; there is no linking between them.
 
 **Do not tie any UX state to the token identity for usage limits.** Limits key off `userId`/`eventId` in the DB — a new login/token does not reset anything (this is intentional; see §7).
 

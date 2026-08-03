@@ -1,6 +1,7 @@
 import { Global, Module, Provider } from '@nestjs/common';
 import { AppConfigService } from '@akabbo/config';
 import {
+  EMAIL_PROVIDER,
   LLM_PROVIDER,
   PAYMENT_PROVIDER,
   SEARCH_PROVIDER,
@@ -25,6 +26,9 @@ import { GcsStorageProvider } from './storage/gcs-storage.provider';
 import { SearchProvider } from './search/search.provider';
 import { StubSearchProvider } from './search/stub-search.provider';
 import { TavilySearchProvider } from './search/tavily-search.provider';
+import { EmailProvider } from './email/email.provider';
+import { StubEmailProvider } from './email/stub-email.provider';
+import { TwilioEmailProvider } from './email/twilio-email.provider';
 
 /**
  * Selects the real LLM provider from the env selector (Phase 2). Default 'stub'
@@ -128,12 +132,27 @@ function buildSearchProvider(config: AppConfigService): SearchProvider {
   return new TavilySearchProvider({ apiKey });
 }
 
+/**
+ * Selects the email provider (email OTP auth). 'twilio' wires the real
+ * Twilio Email API adapter when the account credentials are present;
+ * otherwise the stub.
+ */
+function buildEmailProvider(config: AppConfigService): EmailProvider {
+  if (config.get('EMAIL_PROVIDER') !== 'twilio') return new StubEmailProvider();
+  const accountSid = config.get('TWILIO_ACCOUNT_SID');
+  const authToken = config.get('TWILIO_AUTH_TOKEN');
+  const fromAddress = config.get('EMAIL_FROM_ADDRESS');
+  if (!accountSid || !authToken || !fromAddress) return new StubEmailProvider();
+  return new TwilioEmailProvider({ accountSid, authToken, fromAddress });
+}
+
 const providerBindings: Provider[] = [
   { provide: LLM_PROVIDER, useFactory: buildLlmProvider, inject: [AppConfigService] },
   { provide: SMS_PROVIDER, useFactory: buildSmsProvider, inject: [AppConfigService] },
   { provide: PAYMENT_PROVIDER, useFactory: buildPaymentProvider, inject: [AppConfigService] },
   { provide: STORAGE_PROVIDER, useFactory: buildStorageProvider, inject: [AppConfigService] },
   { provide: SEARCH_PROVIDER, useFactory: buildSearchProvider, inject: [AppConfigService] },
+  { provide: EMAIL_PROVIDER, useFactory: buildEmailProvider, inject: [AppConfigService] },
 ];
 
 @Global()

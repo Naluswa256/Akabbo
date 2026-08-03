@@ -110,9 +110,15 @@ export class MembershipService {
   }
 
   /** List all active members of an event with their roles and user information. */
-  async listMembers(
-    ctx: OperationContext,
-  ): Promise<Array<{ id: string; userId: string; role: EventRole; invitedAt: string; user: { phone: string } }>> {
+  async listMembers(ctx: OperationContext): Promise<
+    Array<{
+      id: string;
+      userId: string;
+      role: EventRole;
+      invitedAt: string;
+      user: { phone: string | null; email: string | null };
+    }>
+  > {
     this.permissions.assert(ctx.event.role, 'event:read');
     return this.tenant.runInEvent(ctx.event.eventId, async (tx) => {
       const members = await tx.eventMember.findMany({
@@ -122,7 +128,7 @@ export class MembershipService {
           userId: true,
           role: true,
           createdAt: true,
-          user: { select: { phone: true } },
+          user: { select: { phone: true, email: true } },
         },
         orderBy: { createdAt: 'asc' },
       });
@@ -131,7 +137,7 @@ export class MembershipService {
         userId: m.userId,
         role: m.role,
         invitedAt: m.createdAt.toISOString(),
-        user: { phone: m.user.phone },
+        user: { phone: m.user.phone, email: m.user.email },
       }));
     });
   }

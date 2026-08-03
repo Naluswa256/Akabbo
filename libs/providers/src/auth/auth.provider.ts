@@ -14,14 +14,19 @@ export interface StartOtpRequest {
   phone: string;
 }
 
+export interface StartEmailOtpRequest {
+  /** PII — never logged (§3.10). */
+  email: string;
+}
+
 export interface StartOtpResult {
   /** Opaque challenge id the client echoes back on verify. */
   challengeId: string;
   expiresInSeconds: number;
   /**
    * Populated ONLY in dev (AUTH_EXPOSE_OTP=true), never in production — real
-   * OTP delivery is over SMS (Communications, Phase 3). Lets us exercise the
-   * full auth flow before the SMS channel exists.
+   * OTP delivery is over SMS (Communications, Phase 3) or email. Lets us
+   * exercise the full auth flow before that channel exists.
    */
   devCode?: string;
 }
@@ -59,6 +64,9 @@ export interface AuthenticatedActor {
 export interface AuthProvider {
   startOtp(request: StartOtpRequest): Promise<StartOtpResult>;
   verifyOtp(request: VerifyOtpRequest): Promise<AuthSession>;
+  /** Same challenge/verify shape as phone OTP, dispatched over email instead. */
+  startEmailOtp(request: StartEmailOtpRequest): Promise<StartOtpResult>;
+  verifyEmailOtp(request: VerifyOtpRequest): Promise<AuthSession>;
   refreshToken(request: RefreshTokenRequest): Promise<AuthSession>;
   /**
    * Validate a presented access token and return the actor, or null if the

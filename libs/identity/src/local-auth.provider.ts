@@ -13,9 +13,12 @@ import {
   AuthenticatedActor,
   AuthProvider,
   AuthSession,
+  EMAIL_PROVIDER,
+  EmailProvider,
   RefreshTokenRequest,
   SMS_PROVIDER,
   SmsProvider,
+  StartEmailOtpRequest,
   StartOtpRequest,
   StartOtpResult,
   VerifyOtpRequest,
@@ -36,8 +39,9 @@ interface RefreshJwtPayload {
 }
 
 /**
- * Phone-OTP + JWT auth (Phase 1), implementing the {@link AuthProvider}
- * interface. Dispatches OTP via {@link SmsProvider} when available.
+ * Phone-OTP and email-OTP + JWT auth (Phase 1), implementing the
+ * {@link AuthProvider} interface. Dispatches phone OTP via {@link SmsProvider}
+ * and email OTP via {@link EmailProvider} when available.
  */
 @Injectable()
 export class LocalAuthProvider implements AuthProvider {
@@ -48,9 +52,11 @@ export class LocalAuthProvider implements AuthProvider {
     private readonly users: UserService,
     private readonly config: AppConfigService,
     @Optional() @Inject(SMS_PROVIDER) private readonly sms?: SmsProvider,
+    @Optional() @Inject(EMAIL_PROVIDER) private readonly email?: EmailProvider,
   ) {}
 
   async startOtp(request: StartOtpRequest): Promise<StartOtpResult> {
+    await this.assertCooldownElapsed({ phone: request.phone });
     const ttl = this.config.get('OTP_TTL_SECONDS');
     const code = generateOtp(6);
     const challenge = await this.prisma.authOtpChallenge.create({
@@ -89,7 +95,12 @@ export class LocalAuthProvider implements AuthProvider {
     const challenge = await this.prisma.authOtpChallenge.findUnique({
       where: { id: request.challengeId },
     });
-    if (!challenge) throw new BadRequestException('Invalid or expired challenge');
+    // The combined phone-channel check deliberately shares one error message
+    // with "doesn't exist" — an email challenge's id presented here must not
+    // be distinguishable from a bogus id.
+    if (!challenge || !challenge.phone) {
+      throw new BadRequestException('Invalid or expired challenge');
+    }
     if (challenge.consumedAt) throw new BadRequestException('Challenge already used');
     if (challenge.expiresAt.getTime() < Date.now()) {
       throw new BadRequestException('Challenge expired');
@@ -121,6 +132,104 @@ export class LocalAuthProvider implements AuthProvider {
     // provider graph would force every unrelated consumer to satisfy that
     // graph too. The controller layer is the right place for this fan-out.
     return this.issueSession(user.id, true, user.isNew);
+  }
+
+  async startEmailOtp(request: StartEmailOtpRequest): Promise<StartOtpResult> {
+    await this.assertCooldownElapsed({ email: request.email });
+    const ttl = this.config.get('OTP_TTL_SECONDS');
+    const code = generateOtp(6);
+    const challenge = await this.prisma.authOtpChallenge.create({
+      data: {
+        email: request.email,
+        codeHash: hashOtp(code),
+        expiresAt: new Date(Date.now() + ttl * 1000),
+      },
+      select: { id: true },
+    });
+
+    this.logger.log(`Email OTP challenge issued (challengeId=${challenge.id})`);
+
+    // Dispatch OTP via email provider (Twilio Email API) if configured
+    if (this.email) {
+      this.email
+        .send({
+          to: request.email,
+          subject: 'Your Akabbo verification code',
+          body: `Your Akabbo verification code is: ${code}. Valid for 5 minutes.`,
+          idempotencyKey: `otp:${challenge.id}`,
+        })
+        .catch((err) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.logger.warn(`OTP email dispatch skipped/failed for ${request.email}: ${msg}`);
+        });
+    }
+
+    return {
+      challengeId: challenge.id,
+      expiresInSeconds: ttl,
+      devCode: this.config.get('AUTH_EXPOSE_OTP') ? code : undefined,
+    };
+  }
+
+  async verifyEmailOtp(request: VerifyOtpRequest): Promise<AuthSession> {
+    const challenge = await this.prisma.authOtpChallenge.findUnique({
+      where: { id: request.challengeId },
+    });
+    if (!challenge || !challenge.email) {
+      throw new BadRequestException('Invalid or expired challenge');
+    }
+    if (challenge.consumedAt) throw new BadRequestException('Challenge already used');
+    if (challenge.expiresAt.getTime() < Date.now()) {
+      throw new BadRequestException('Challenge expired');
+    }
+    if (challenge.attempts >= this.config.get('OTP_MAX_ATTEMPTS')) {
+      throw new BadRequestException('Too many attempts');
+    }
+
+    if (!verifyOtp(request.code, challenge.codeHash)) {
+      await this.prisma.authOtpChallenge.update({
+        where: { id: challenge.id },
+        data: { attempts: { increment: 1 } },
+      });
+      throw new UnauthorizedException('Incorrect code');
+    }
+
+    await this.prisma.authOtpChallenge.update({
+      where: { id: challenge.id },
+      data: { consumedAt: new Date() },
+    });
+    const user = await this.users.findOrCreateByEmail(challenge.email);
+    if (!user.emailVerified) await this.users.markEmailVerified(user.id);
+
+    return this.issueSession(user.id, user.phoneVerified, user.isNew);
+  }
+
+  /**
+   * Blocks issuing a fresh challenge while a recent one for the same
+   * identifier is still outstanding — the only guard against unlimited
+   * SMS/email-bombing via repeated start calls today (neither channel had
+   * any rate limiting before this). Deliberately a short cooldown rather
+   * than a block for the challenge's full TTL, so a legitimate retry (code
+   * lost in transit) isn't stuck waiting minutes. Only PENDING (unconsumed)
+   * challenges count: once one has been successfully verified, that proves
+   * possession of the phone/email, so a fresh login right after — log out,
+   * log back in — must not be cooldown-blocked.
+   */
+  private async assertCooldownElapsed(
+    identifier: { phone: string } | { email: string },
+  ): Promise<void> {
+    const cooldown = this.config.get('OTP_COOLDOWN_SECONDS');
+    if (cooldown <= 0) return;
+    const last = await this.prisma.authOtpChallenge.findFirst({
+      where: { ...identifier, consumedAt: null },
+      orderBy: { createdAt: 'desc' },
+      select: { createdAt: true },
+    });
+    if (last && Date.now() - last.createdAt.getTime() < cooldown * 1000) {
+      throw new BadRequestException(
+        'A verification code was already sent — please wait a moment before requesting another.',
+      );
+    }
   }
 
   async refreshToken(request: RefreshTokenRequest): Promise<AuthSession> {

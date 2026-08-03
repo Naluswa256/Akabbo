@@ -4,8 +4,10 @@ import { EntitlementService } from './entitlement.service';
 
 export interface AdminUserRow {
   id: string;
-  phone: string;
+  phone: string | null;
   phoneVerified: boolean;
+  email: string | null;
+  emailVerified: boolean;
   displayName: string | null;
   createdAt: string;
   planCode: string;
@@ -54,6 +56,8 @@ export class AdminUsersService {
         id: true,
         phone: true,
         phoneVerified: true,
+        email: true,
+        emailVerified: true,
         displayName: true,
         createdAt: true,
         _count: { select: { ownedEvents: true } },
@@ -68,6 +72,8 @@ export class AdminUsersService {
         id: u.id,
         phone: u.phone,
         phoneVerified: u.phoneVerified,
+        email: u.email,
+        emailVerified: u.emailVerified,
         displayName: u.displayName,
         createdAt: u.createdAt.toISOString(),
         planCode: ent.planCode,

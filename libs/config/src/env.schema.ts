@@ -48,6 +48,10 @@ export const envSchema = z
     JWT_REFRESH_TTL_SECONDS: z.coerce.number().int().positive().default(2592000),
     OTP_TTL_SECONDS: z.coerce.number().int().positive().default(300),
     OTP_MAX_ATTEMPTS: z.coerce.number().int().positive().default(5),
+    // Minimum time between successive challenge issuances for the same
+    // phone/email — blocks unlimited SMS/email-bombing via repeated
+    // otp/start calls. 0 disables the cooldown.
+    OTP_COOLDOWN_SECONDS: z.coerce.number().int().nonnegative().default(30),
     // Dev-only convenience: return the OTP code in the API response instead of
     // sending it (real SMS delivery of OTP arrives with Communications, Phase 3).
     AUTH_EXPOSE_OTP: z
@@ -105,6 +109,14 @@ export const envSchema = z
     // set). Skipped entirely — no search happens — until both are set.
     SEARCH_PROVIDER: z.string().default('stub'),
     SEARCH_API_KEY: z.string().optional().default(''),
+    // Email OTP auth. 'stub' (default) | 'twilio' (real Twilio Email API,
+    // once the account credentials + from address are set). Twilio's own
+    // Email API (comms.twilio.com), not the legacy SendGrid v3 API — Basic
+    // auth with the Account SID/Auth Token pair, not a bearer API key.
+    EMAIL_PROVIDER: z.string().default('stub'),
+    TWILIO_ACCOUNT_SID: z.string().optional().default(''),
+    TWILIO_AUTH_TOKEN: z.string().optional().default(''),
+    EMAIL_FROM_ADDRESS: z.string().default(''),
   })
   // Production hardening: never boot prod with dev-grade auth (§8 fail-closed).
   .superRefine((env, ctx) => {

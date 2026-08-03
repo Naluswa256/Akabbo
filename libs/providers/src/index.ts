@@ -33,3 +33,8 @@ export * from './auth/stub-auth.provider';
 export * from './search/search.provider';
 export * from './search/stub-search.provider';
 export * from './search/tavily-search.provider';
+
+// Email (email OTP auth)
+export * from './email/email.provider';
+export * from './email/stub-email.provider';
+export * from './email/twilio-email.provider';

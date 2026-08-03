@@ -29,7 +29,7 @@ export interface MessageView {
 export interface AdminConversationRow {
   id: string;
   userId: string;
-  userPhone: string;
+  userPhone: string | null;
   title: string | null;
   activeEventId: string | null;
   messageCount: number;

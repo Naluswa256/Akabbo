@@ -5,6 +5,7 @@ import {
   AuthProvider,
   AuthSession,
   RefreshTokenRequest,
+  StartEmailOtpRequest,
   StartOtpRequest,
   StartOtpResult,
   VerifyOtpRequest,
@@ -21,6 +22,14 @@ export class StubAuthProvider implements AuthProvider {
 
   verifyOtp(_request: VerifyOtpRequest): Promise<AuthSession> {
     throw new ProviderNotImplementedError('AuthProvider', 'verifyOtp', 'Phase 1');
+  }
+
+  startEmailOtp(_request: StartEmailOtpRequest): Promise<StartOtpResult> {
+    throw new ProviderNotImplementedError('AuthProvider', 'startEmailOtp', 'Phase 1');
+  }
+
+  verifyEmailOtp(_request: VerifyOtpRequest): Promise<AuthSession> {
+    throw new ProviderNotImplementedError('AuthProvider', 'verifyEmailOtp', 'Phase 1');
   }
 
   refreshToken(_request: RefreshTokenRequest): Promise<AuthSession> {

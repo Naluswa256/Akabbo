@@ -1,10 +1,15 @@
-import { IsString, Matches, Length } from 'class-validator';
+import { IsEmail, IsString, Matches, Length } from 'class-validator';
 
 export class StartOtpDto {
   /** E.164 phone number. */
   @IsString()
   @Matches(/^\+\d{7,15}$/, { message: 'phone must be E.164, e.g. +256700000000' })
   phone!: string;
+}
+
+export class StartEmailOtpDto {
+  @IsEmail({}, { message: 'email must be a valid email address' })
+  email!: string;
 }
 
 export class VerifyOtpDto {

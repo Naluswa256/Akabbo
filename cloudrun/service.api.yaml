@@ -58,7 +58,7 @@ spec:
               value: AKABBO
             # --- Twilio (Email) ---
             - name: EMAIL_FROM_ADDRESS
-              value: noreply@linktrust.app
+              value: noreply@em9096.linktrust.app
             # --- Secrets from Secret Manager ---
             - name: DATABASE_URL
               valueFrom:

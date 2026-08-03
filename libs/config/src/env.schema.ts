@@ -117,6 +117,9 @@ export const envSchema = z
     TWILIO_ACCOUNT_SID: z.string().optional().default(''),
     TWILIO_AUTH_TOKEN: z.string().optional().default(''),
     EMAIL_FROM_ADDRESS: z.string().default(''),
+    // SendGrid Mail Send v3 API key (EMAIL_PROVIDER=sendgrid).
+    // Created in SendGrid Console → Settings → API Keys.
+    SENDGRID_API_KEY: z.string().optional().default(''),
   })
   // Production hardening: never boot prod with dev-grade auth (§8 fail-closed).
   .superRefine((env, ctx) => {

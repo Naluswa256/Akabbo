@@ -1,4 +1,4 @@
-import { Global, Module, Provider } from '@nestjs/common';
+import { Global, Logger, Module, Provider } from '@nestjs/common';
 import { AppConfigService } from '@akabbo/config';
 import {
   EMAIL_PROVIDER,
@@ -29,6 +29,7 @@ import { TavilySearchProvider } from './search/tavily-search.provider';
 import { EmailProvider } from './email/email.provider';
 import { StubEmailProvider } from './email/stub-email.provider';
 import { TwilioEmailProvider } from './email/twilio-email.provider';
+import { SendGridEmailProvider } from './email/sendgrid-email.provider';
 
 /**
  * Selects the real LLM provider from the env selector (Phase 2). Default 'stub'
@@ -133,23 +134,36 @@ function buildSearchProvider(config: AppConfigService): SearchProvider {
 }
 
 /**
- * Selects the email provider (email OTP auth). 'twilio' wires the real
- * Twilio Email API adapter when the account credentials are present;
- * otherwise the stub.
+ * Selects the email provider (email OTP auth).
+ *  'sendgrid' → SendGrid Mail Send v3 API (api.sendgrid.com), Bearer API key.
+ *              Verified sender: noreply@linktrust.app (domain-authenticated).
+ *  'twilio'   → Twilio comms.twilio.com Email API, Basic auth (legacy path).
+ *  anything else / missing creds → stub (logs but never throws).
  */
 function buildEmailProvider(config: AppConfigService): EmailProvider {
-  if (config.get('EMAIL_PROVIDER') !== 'twilio') return new StubEmailProvider();
-  const accountSid = config.get('TWILIO_ACCOUNT_SID');
-  const authToken = config.get('TWILIO_AUTH_TOKEN');
-  if (!accountSid || !authToken) return new StubEmailProvider();
-  // TEMPORARY fallback: the custom domain sender (noreply@em9096.linktrust.app)
-  // is DNS-authenticated but still rejected by Twilio account-side (confirmed
-  // via direct API testing, 2026-08-03) — only the account's auto-provisioned
-  // sender identity ({accountSid}@linktrust.app) is accepted today. Derived
-  // here (never committed as a literal) so EMAIL_FROM_ADDRESS can stay unset
-  // until the custom domain clears; set it explicitly to override.
-  const fromAddress = config.get('EMAIL_FROM_ADDRESS') || `${accountSid}@linktrust.app`;
-  return new TwilioEmailProvider({ accountSid, authToken, fromAddress });
+  const selector = config.get('EMAIL_PROVIDER');
+
+  if (selector === 'sendgrid') {
+    const apiKey = config.get('SENDGRID_API_KEY');
+    const fromAddress = config.get('EMAIL_FROM_ADDRESS');
+    if (!apiKey || !fromAddress) {
+      new Logger('ProvidersModule').warn(
+        'EMAIL_PROVIDER=sendgrid but SENDGRID_API_KEY or EMAIL_FROM_ADDRESS is missing — falling back to stub',
+      );
+      return new StubEmailProvider();
+    }
+    return new SendGridEmailProvider({ apiKey, fromAddress });
+  }
+
+  if (selector === 'twilio') {
+    const accountSid = config.get('TWILIO_ACCOUNT_SID');
+    const authToken = config.get('TWILIO_AUTH_TOKEN');
+    if (!accountSid || !authToken) return new StubEmailProvider();
+    const fromAddress = config.get('EMAIL_FROM_ADDRESS') || `${accountSid}@linktrust.app`;
+    return new TwilioEmailProvider({ accountSid, authToken, fromAddress });
+  }
+
+  return new StubEmailProvider();
 }
 
 const providerBindings: Provider[] = [

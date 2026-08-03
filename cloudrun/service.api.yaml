@@ -57,8 +57,14 @@ spec:
             - name: UGSMS_SENDER_ID
               value: AKABBO
             # --- Twilio (Email) ---
-            - name: EMAIL_FROM_ADDRESS
-              value: noreply@em9096.linktrust.app
+            # EMAIL_FROM_ADDRESS is deliberately NOT set here: the custom
+            # domain (noreply@em9096.linktrust.app) is DNS-authenticated but
+            # Twilio still rejects it as a sender (confirmed via direct API
+            # testing, 2026-08-03). Left unset, buildEmailProvider derives a
+            # working temporary sender from TWILIO_ACCOUNT_SID at runtime
+            # (see providers.module.ts) — set this explicitly once Twilio
+            # accepts the custom domain (check the Email > Domains console
+            # page) to switch back to noreply@em9096.linktrust.app.
             # --- Secrets from Secret Manager ---
             - name: DATABASE_URL
               valueFrom:

@@ -141,8 +141,14 @@ function buildEmailProvider(config: AppConfigService): EmailProvider {
   if (config.get('EMAIL_PROVIDER') !== 'twilio') return new StubEmailProvider();
   const accountSid = config.get('TWILIO_ACCOUNT_SID');
   const authToken = config.get('TWILIO_AUTH_TOKEN');
-  const fromAddress = config.get('EMAIL_FROM_ADDRESS');
-  if (!accountSid || !authToken || !fromAddress) return new StubEmailProvider();
+  if (!accountSid || !authToken) return new StubEmailProvider();
+  // TEMPORARY fallback: the custom domain sender (noreply@em9096.linktrust.app)
+  // is DNS-authenticated but still rejected by Twilio account-side (confirmed
+  // via direct API testing, 2026-08-03) — only the account's auto-provisioned
+  // sender identity ({accountSid}@linktrust.app) is accepted today. Derived
+  // here (never committed as a literal) so EMAIL_FROM_ADDRESS can stay unset
+  // until the custom domain clears; set it explicitly to override.
+  const fromAddress = config.get('EMAIL_FROM_ADDRESS') || `${accountSid}@linktrust.app`;
   return new TwilioEmailProvider({ accountSid, authToken, fromAddress });
 }
 

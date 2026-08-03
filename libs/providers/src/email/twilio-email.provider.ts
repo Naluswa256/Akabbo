@@ -43,7 +43,11 @@ export class TwilioEmailProvider implements EmailProvider {
       body: JSON.stringify({
         from: { address: this.config.fromAddress },
         to: [{ address: request.to }],
-        content: { subject: request.subject, text: request.body },
+        // Confirmed via live testing: the API rejects a content object that
+        // has only `text` (400 "Invalid value provided for field 'content'")
+        // — `html` is required. Sending both is accepted and is the safer
+        // choice for plain-text-only email clients.
+        content: { subject: request.subject, text: request.body, html: toHtml(request.body) },
       }),
     });
 
@@ -55,4 +59,13 @@ export class TwilioEmailProvider implements EmailProvider {
     const body = (await res.json().catch(() => ({}))) as { operationId?: string };
     return { providerMessageId: body.operationId ?? '', status: 'sent' };
   }
+}
+
+/** Minimal plain-text → HTML conversion for a one-line OTP message. */
+function toHtml(text: string): string {
+  const escaped = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  return `<p>${escaped.replace(/\n/g, '<br>')}</p>`;
 }

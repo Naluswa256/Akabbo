@@ -53,11 +53,18 @@ export class GeminiLlmProvider implements LlmProvider {
 
     const generationConfig: Record<string, unknown> = { temperature: request.temperature ?? 0 };
     if (request.maxOutputTokens) generationConfig.maxOutputTokens = request.maxOutputTokens;
-    // thinkingBudget: 0 fully disables the reasoning pass on models that have
-    // one — see LlmCompletionRequest.disableThinking's doc comment for why
-    // this matters. A no-op (silently ignored by the API) on models without
-    // thinking support, so safe to always include when requested.
-    if (request.disableThinking) generationConfig.thinkingConfig = { thinkingBudget: 0 };
+    // Minimizes the reasoning pass — see LlmCompletionRequest.disableThinking's
+    // doc comment for why this matters. NOT a no-op if wrong: confirmed via a
+    // real 400 INVALID_ARGUMENT that the older thinkingBudget:0 knob (valid on
+    // pre-Gemini-3 models) is REJECTED outright by whatever GEMINI_MODEL='...
+    // -latest' currently resolves to (gemini-3.6-flash at the time of writing)
+    // — the model rejects the request rather than ignoring an unknown field.
+    // thinkingLevel is Gemini 3's mechanism instead; verified directly against
+    // the live API to actually drop thoughtsTokenCount to ~0. If a future
+    // model rejects THIS shape too, prefer testing live over reusing whatever
+    // the current model's docs say — this API has changed field shape once
+    // already under this exact alias.
+    if (request.disableThinking) generationConfig.thinkingConfig = { thinkingLevel: 'low' };
 
     const body: Record<string, unknown> = {
       contents,

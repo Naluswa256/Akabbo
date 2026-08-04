@@ -15,8 +15,13 @@ import { ToolCall } from './tools/tool-call';
 const PAYMENT_VERBS = ['paid', 'sent', 'gave', 'deposited', 'contributed', 'brought', 'dropped'];
 const PLEDGE_VERBS = ['pledged', 'promised', 'committed'];
 
-// First money-looking token in a string → minor units.
-const MONEY_TOKEN = /(?:ugx|usd|shs?|\$)?\s?(\d[\d,]*(?:\.\d+)?\s?[km]?)/i;
+// First money-looking token in a string → minor units. The k/m suffix must
+// sit DIRECTLY against the digits (no space, no lookahead letter) — a space
+// before it previously let the k/m/short-suffix check match the leading
+// letter of the NEXT word instead (real bug: "2 mats" → "2m" → 2,000,000;
+// confirmed against a real production mis-stage). "200k"/"1.5m" still match;
+// "2 mats"/"2 kids" no longer do.
+const MONEY_TOKEN = /(?:ugx|usd|shs?|\$)?\s?(\d[\d,]*(?:\.\d+)?(?:[km](?![a-z]))?)/i;
 
 function extractAmount(text: string): bigint | null {
   const m = text.match(MONEY_TOKEN);
@@ -52,7 +57,18 @@ export function parseTier1(utterance: string): ToolCall | null {
   if (verbMatch) {
     const name = verbMatch[1].trim();
     const verb = verbMatch[2].toLowerCase();
-    const amount = extractAmount(verbMatch[3]);
+    const rest = verbMatch[3];
+    // "<quantity>[ <unit>] of <description>" is an in-kind item/service, not
+    // a cash amount — this is exactly the phrasing buildUtterance produces
+    // for document-scanned in-kind rows (e.g. "2 mats of traditional mats",
+    // "2 goats of goats"). A real cash utterance is never phrased this way
+    // ("paid 500,000 of catering" isn't natural); tier1 only handles cash,
+    // so treat this shape as a signal to escalate to tier 2 rather than
+    // mis-stage "2 mats" as a cash pledge of UGX 2 (confirmed real bug).
+    if (/^\s*\d[\d,]*(?:\.\d+)?\s*\S*\s+of\s+\S/i.test(rest)) {
+      return null;
+    }
+    const amount = extractAmount(rest);
     if (name && !looksLikeAmount(name) && amount !== null && amount > 0n) {
       if (PAYMENT_VERBS.includes(verb)) {
         return { tool: 'record_payment', args: { personName: name, amount: amount.toString() } };

@@ -326,7 +326,13 @@ export class ExtractionService {
           continue;
         }
         try {
-          const captured = await this.capture.capture(ctx, utterance);
+          // forceStage=true: a Gemini read of a photo is never a substitute
+          // for human confirmation, however confident the parse — see
+          // CaptureService.capture's doc comment. Without this, tier-1's
+          // guaranteed confidence=1 was auto-executing these straight to the
+          // ledger with zero review, the same guarantee the AI chat agent's
+          // own writes already enforce via routeToolCall(forceStage=true).
+          const captured = await this.capture.capture(ctx, utterance, true);
           if (captured.type === 'pending') {
             staged++;
           } else if (captured.type === 'clarification') {

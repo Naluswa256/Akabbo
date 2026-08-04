@@ -929,11 +929,22 @@ export class CaptureService {
     return rows.length === 1 ? rows[0].id : undefined;
   }
 
-  async capture(ctx: OperationContext, utterance: string): Promise<CaptureResult> {
+  /**
+   * `forceStage` mirrors `routeToolCall`'s same-named guarantee: pass `true`
+   * when the utterance didn't come from a human typing directly into chat
+   * (e.g. read off a photographed document) — high tier-1/tier-2 confidence
+   * there reflects how clearly text was parsed, not that a human confirmed
+   * it, so it must never auto-execute regardless of confidence.
+   */
+  async capture(
+    ctx: OperationContext,
+    utterance: string,
+    forceStage = false,
+  ): Promise<CaptureResult> {
     // Tier 1: deterministic ($0). High confidence by construction.
     const tier1 = parseTier1(utterance);
     if (tier1) {
-      return this.route(ctx, tier1, 1, 'deterministic');
+      return this.route(ctx, tier1, 1, 'deterministic', forceStage);
     }
 
     // Tier 2: the LLM. Metered, structured-output only.
@@ -945,7 +956,7 @@ export class CaptureService {
         message: "Sorry, I didn't catch that. Try e.g. “John paid 200k”.",
       };
     }
-    return this.route(ctx, llmCall.toolCall, llmCall.confidence, 'llm');
+    return this.route(ctx, llmCall.toolCall, llmCall.confidence, 'llm', forceStage);
   }
 
   // --- LLM tier --------------------------------------------------------------

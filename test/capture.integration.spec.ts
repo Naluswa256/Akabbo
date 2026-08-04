@@ -163,7 +163,10 @@ describe('Phase 2 — AI capture (integration)', () => {
     // Tier-1 can't parse this; the mock LLM returns a low-confidence pledge.
     llm.next = {
       toolCalls: [
-        { name: 'record_pledge', arguments: { personName: 'Peter', amount: '1500000', confidence: 0.4 } },
+        {
+          name: 'record_pledge',
+          arguments: { personName: 'Peter', amount: '1500000', confidence: 0.4 },
+        },
       ],
       usage: { inputTokens: 1500, outputTokens: 40, model: 'mock-model' },
     };
@@ -211,6 +214,68 @@ describe('Phase 2 — AI capture (integration)', () => {
     // And a VIEWER cannot read amounts either (finance privacy, §12): "summary"
     // returns money, so it is denied.
     await expect(capture.capture(viewerCtx, 'summary')).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('editing a pending pledge before confirming changes what gets recorded, and re-renders the prompt', async () => {
+    const owner = await makeActor();
+    const event = await events.createEvent(owner, { name: 'Edit before confirm' });
+    const ctx = await ctxFor(owner, event.id);
+
+    llm.next = {
+      toolCalls: [
+        {
+          name: 'record_pledge',
+          arguments: { personName: 'Kiwanuka Richard', amount: '2000000', confidence: 0.4 },
+        },
+      ],
+      usage: { inputTokens: 100, outputTokens: 10, model: 'mock-model' },
+    };
+    const res = await capture.capture(ctx, "I think Kiwanuka Richard's pledge is around 2m maybe");
+    expect(res.type).toBe('pending');
+    const pendingId = (res as { pendingId: string }).pendingId;
+
+    // A misread amount is corrected before anything is recorded.
+    const edited = await confirmations.update(ctx, pendingId, { amount: '70000' });
+    expect(edited.prompt).toContain('70,000');
+    expect(edited.status).toBe('PENDING');
+
+    await confirmations.confirm(ctx, pendingId);
+    const totals = await queries.getEventTotals(ctx);
+    expect(totals.totalCommitted).toBe('70000');
+  });
+
+  it('rejects editing an already-resolved pending item, and editing an unsupported intent', async () => {
+    const owner = await makeActor();
+    const event = await events.createEvent(owner, { name: 'Edit guards' });
+    const ctx = await ctxFor(owner, event.id);
+    await people.createPerson(ctx, { displayName: 'Peter' });
+
+    llm.next = {
+      toolCalls: [
+        {
+          name: 'record_pledge',
+          arguments: { personName: 'Peter', amount: '100000', confidence: 0.4 },
+        },
+      ],
+      usage: { inputTokens: 100, outputTokens: 10, model: 'mock-model' },
+    };
+    const res = await capture.capture(ctx, "Peter's pledge is around 100k maybe");
+    const pendingId = (res as { pendingId: string }).pendingId;
+    await confirmations.confirm(ctx, pendingId);
+
+    // Already confirmed — editing it now is rejected.
+    await expect(confirmations.update(ctx, pendingId, { amount: '1' })).rejects.toBeDefined();
+
+    // create_budget_item is a real intent, deliberately not on the edit allowlist.
+    const budgetPending = await confirmations.create(ctx, {
+      intent: 'create_budget_item',
+      action: { tool: 'create_budget_item', name: 'Tents', targetValue: '500000' },
+      confidence: 0.4,
+      prompt: 'Add a budget line "Tents" of 500,000?',
+    });
+    await expect(
+      confirmations.update(ctx, budgetPending.id, { amount: '1' }),
+    ).rejects.toBeDefined();
   });
 
   it('escalates to the LLM only when tier-1 cannot parse', async () => {

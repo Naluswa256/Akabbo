@@ -180,6 +180,50 @@ The dependency the "Scan a written list" feature flagged is resolved: `Document.
 
 ---
 
+## 6. Editing a staged card before confirming (new)
+
+Until now a pending confirmation card — the ones the chat/assistant/document-scan flow produces, `PLEDGE`/`PAYMENT`/etc. — only offered **Confirm** (record exactly as staged) or **Cancel** (discard). There was no way to fix a small mistake in between, so a card that's almost right forced a choice between recording wrong data or losing the entry and re-typing it from scratch in chat. This came from a real example: a scanned row read "1 crate water" but staged as "1 crate soft drinks" — plausible, not obviously wrong at a glance, exactly the kind of thing an organizer should be able to fix in place.
+
+**New endpoint:**
+
+```http
+PATCH /events/:eventId/pending/:id
+Authorization: Bearer <accessToken>
+Content-Type: application/json
+
+{ "amount": "70000" }
+```
+
+**200** — same shape as everywhere else pending rows are returned:
+```json
+{
+  "id": "b7e1...",
+  "intent": "record_pledge",
+  "prompt": "Record Kiwanuka Richard's pledge of 70,000 (traditional mats)?",
+  "confidence": 1,
+  "status": "PENDING"
+}
+```
+
+Send only the fields you're changing — this is a genuine partial update, not a full replace. All fields are optional:
+
+| Field | Type | Notes |
+|---|---|---|
+| `displayName` | string | The contributor's name. |
+| `amount` | string | Integer minor units, same convention as everywhere else (`"70000"`, not `"70,000"`). |
+| `type` | `"CASH" \| "ITEM" \| "SERVICE"` | |
+| `description` | string | The in-kind item/service text. Send `""` to clear it. |
+
+**Which cards this works on:** only `record_pledge`, `record_pledge_with_payment`, `record_direct_contribution`, `record_payment` — i.e. exactly the pledge/contribution/payment cards this panel shows. `record_payment` ignores `type`/`description` if sent (it discharges an existing pledge, whose type is already fixed) rather than erroring, so you don't need to special-case which fields to send per card type. Calling this on any other pending intent (budget items, merges, reminders, invites) returns `400` — those aren't editable this way; cancel and re-capture instead.
+
+**Not editable at all:** which underlying action it is (a `PLEDGE` card can't become a `PAYMENT` card), the person/pledge/budget-item it resolves to, or the event/actor — those need a fresh capture, not an edit, since re-resolving an id from a name safely isn't a partial-field operation.
+
+**`prompt` is regenerated server-side from your edit** — always re-render the card from the fresh response rather than patching the displayed text yourself, so what's shown always matches what Confirm will actually do. The wording may not exactly match the original AI-staged phrasing (e.g. always "Record X's pledge of Y?" rather than the "Add X as a contributor..." variant used for a brand-new contributor) — that's expected, not a bug.
+
+Still records the edited action under the confirming human once `POST /pending/:id/confirm` is called afterward, same provenance/audit behavior as an unedited card.
+
+---
+
 ## Quick reference
 
 | Action | Endpoint |
@@ -192,5 +236,6 @@ The dependency the "Scan a written list" feature flagged is resolved: `Document.
 | Add a new split | `POST /events/:eventId/fulfillments` |
 | Edit an existing split | `POST /events/:eventId/fulfillments/:fulfillmentId/correct` |
 | Scan a written list → staged pledges | `POST /events/:eventId/documents` (`kind: "CONTRIBUTION_LIST"`) → poll → diff pending |
+| Edit a staged pledge/payment card before confirming | `PATCH /events/:eventId/pending/:id` (§6) |
 
 All money in/out is a plain digit string of integer minor units — never comma-formatted by the API, never floats.

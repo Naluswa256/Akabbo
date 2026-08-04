@@ -1,10 +1,10 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { Actor, OperationContext } from '@akabbo/access';
 import { MembershipService } from '@akabbo/ledger';
 import { AssistantService, CaptureService, ConfirmationService } from '@akabbo/ai';
 import { AuthGuard } from '../auth/auth.guard';
 import { CurrentActor } from '../auth/current-actor.decorator';
-import { AssistantDto, CaptureDto } from './capture.dto';
+import { AssistantDto, CaptureDto, UpdatePendingDto } from './capture.dto';
 
 /**
  * The conversational capture surface (Phase 2). `capture` turns natural
@@ -53,6 +53,20 @@ export class CaptureController {
   @Get('pending')
   async listPending(@CurrentActor() actor: Actor, @Param('eventId') eventId: string) {
     return this.confirmations.listPending(await this.ctx(actor, eventId));
+  }
+
+  /**
+   * Edit a still-pending proposal before confirming it (e.g. a scan misread
+   * an amount or item). Only fields present in the body change.
+   */
+  @Patch('pending/:id')
+  async updatePending(
+    @CurrentActor() actor: Actor,
+    @Param('eventId') eventId: string,
+    @Param('id') id: string,
+    @Body() dto: UpdatePendingDto,
+  ) {
+    return this.confirmations.update(await this.ctx(actor, eventId), id, dto);
   }
 
   @Post('pending/:id/confirm')

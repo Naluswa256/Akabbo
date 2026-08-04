@@ -106,6 +106,32 @@ If the same person appears on multiple rows and the rows clearly represent
 different contributions, preserve the rows separately rather than silently
 merging them.
 
+A single physical line can ALSO contain TWO OR MORE DIFFERENT people, each
+with their own name and amount, written one after another to save space —
+this is common in handwritten lists and is NOT the same as one contributor
+with multiple details. Each distinct named person on that line is a
+SEPARATE entry, even though they share one line.
+
+For example, a line written as:
+
+"Ssenyonga Paul - 30k, Nakiyingi Stella - 1.2 million"
+
+must become TWO entries — one for Ssenyonga Paul (30,000), one for
+Nakiyingi Stella (1,200,000) — never one entry with a garbled or merged
+name, and never silently dropping the second person because they share a
+line with someone else.
+
+When several names are written together with only ONE shared amount or
+item at the end (e.g. "Kasiima Charles - Musisi Grace - Babirye Stella - 1
+traditional basket set"), and the source does not indicate how it splits
+between them, create one entry PER NAME, each carrying the same shared
+item/description — do not guess an individual split, and do not collapse
+the group into a single entry under only the first name.
+
+Read to the end of the document. A long list with many rows is still a
+single document — do not stop partway and return only the entries you have
+processed so far.
+
 ==================================================
 4. NAMES
 ==================================================

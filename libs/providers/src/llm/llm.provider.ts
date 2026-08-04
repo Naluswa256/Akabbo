@@ -60,6 +60,17 @@ export interface LlmCompletionRequest {
   temperature?: number;
   maxOutputTokens?: number;
   /**
+   * Skip the model's internal reasoning pass when the provider supports one
+   * (Gemini "thinking" models). Reasoning tokens draw from the SAME budget as
+   * `maxOutputTokens` — on a Gemini thinking model, a call with no output-token
+   * headroom to spare (e.g. transcribing a long, dense document) can silently
+   * spend most/all of that budget "thinking" and return a short/truncated
+   * result. Extraction-style calls that just need faithful transcription,
+   * never actual reasoning, should set this. Ignored by providers with no
+   * such concept (e.g. Anthropic here).
+   */
+  disableThinking?: boolean;
+  /**
    * 'required' forces the model to emit a tool call (single-shot capture /
    * extraction); 'auto' (default) lets it call tools OR answer in prose, which
    * the agentic read loop needs so it can stop and reply.

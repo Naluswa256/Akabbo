@@ -51,9 +51,17 @@ export class GeminiLlmProvider implements LlmProvider {
       }
     }
 
+    const generationConfig: Record<string, unknown> = { temperature: request.temperature ?? 0 };
+    if (request.maxOutputTokens) generationConfig.maxOutputTokens = request.maxOutputTokens;
+    // thinkingBudget: 0 fully disables the reasoning pass on models that have
+    // one — see LlmCompletionRequest.disableThinking's doc comment for why
+    // this matters. A no-op (silently ignored by the API) on models without
+    // thinking support, so safe to always include when requested.
+    if (request.disableThinking) generationConfig.thinkingConfig = { thinkingBudget: 0 };
+
     const body: Record<string, unknown> = {
       contents,
-      generationConfig: { temperature: request.temperature ?? 0 },
+      generationConfig,
     };
     if (system) body.systemInstruction = { parts: [{ text: system }] };
     if (request.tools?.length) {

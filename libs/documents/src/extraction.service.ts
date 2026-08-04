@@ -106,6 +106,12 @@ export class ExtractionService {
         temperature: 0,
         // Extraction must return the structured tool call, not prose.
         toolChoice: 'required',
+        // A dense document can have many lines; leave real headroom rather
+        // than the provider default (see maxOutputTokens/disableThinking
+        // doc comments — a Gemini thinking model can otherwise silently
+        // truncate the entries array partway through a long document).
+        maxOutputTokens: 16384,
+        disableThinking: true,
       });
 
       await this.meter.recordLlmCall(eventId, result.usage, costMicroUsd(result.usage), {
@@ -281,6 +287,11 @@ export class ExtractionService {
         attachments: [{ mimeType: file.mimeType, data: file.body }],
         temperature: 0,
         toolChoice: 'required',
+        // See processBudget's identical config above for why — a real,
+        // confirmed bug: a 30-row handwritten list silently came back as
+        // only 8 entries with a clean (non-error) truncation.
+        maxOutputTokens: 16384,
+        disableThinking: true,
       });
 
       await this.meter.recordLlmCall(eventId, result.usage, costMicroUsd(result.usage), {

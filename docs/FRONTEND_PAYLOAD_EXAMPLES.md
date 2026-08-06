@@ -467,7 +467,61 @@ POST /events/evt_123/pending/pc_ext_2/reject     → { id, status: "REJECTED" }
 
 ---
 
-## 6. Quick reference — where each thing comes from
+## 6. PAYMENTS — buying a plan, and why the polling timeout matters
+
+Real incident, 2026-08-06: a user's MoMo payment succeeded and Akabbo correctly granted the plan and credits — but the UI's polling had already given up and stopped checking, so nothing visibly changed until the user manually refreshed the page. That's a real bug worth designing around carefully, not just a one-off.
+
+### 6.1 Start a purchase
+
+```http
+POST /events/:eventId/billing/purchase
+Authorization: Bearer <accessToken>
+Content-Type: application/json
+
+{ "planCode": "STARTER", "phone": "+256701234567" }
+```
+(Account-level plans: `POST /billing/subscribe` with `planCode: "ORGANIZER_PRO" | "BUSINESS"`, same body shape otherwise.)
+
+**200**
+```json
+{
+  "invoiceId": "25ff3659-...",
+  "reference": "inv_648cadb50960efabf5d562a7",
+  "charge": {
+    "providerChargeId": "muda_inv_648cadb5...",
+    "status": "pending",
+    "authorizationUrl": null
+  }
+}
+```
+
+At this point **nothing has been charged yet** — `status: "pending"` means Muda has queued the MoMo prompt. The user now approves it **on their phone** (enters their MoMo PIN) — this step has no fixed duration; it depends entirely on how quickly the user notices and responds to the prompt, then Muda processing it, then their webhook reaching us.
+
+### 6.2 Poll for completion
+
+```http
+GET /events/:eventId/billing/entitlement
+Authorization: Bearer <accessToken>
+```
+
+Poll this (not the invoice) — it reflects the *effective* plan/balance, which is what the UI actually needs to show. Compare `planCode` before/after `purchase` to detect the upgrade landing, rather than trying to track the invoice's own status from the client.
+
+### 6.3 Timing — use real numbers, not a guess
+
+In the incident above, the actual gap from `purchase` returning to the webhook confirming was **~68 seconds** (invoice created 08:27:01, entitlement active 08:28:09) — and that's one real, unremarkable case, not a worst case. MoMo approval time varies a lot by user (phone notification delay, how quickly they act, network conditions on their side).
+
+**Do not:**
+- Use a short fixed timeout (under ~30s) and treat expiry as failure.
+- Stop polling and show nothing further once the timer runs out — this is exactly what happened in the incident.
+
+**Do:**
+- Poll on a reasonable interval (e.g. every 3–5s) for at least 2–3 minutes before backing off.
+- When you do stop actively polling, don't show a dead/failed state — show something like "still processing — this can take a minute, we'll update automatically" and keep checking at a slower interval (e.g. every 30s) rather than stopping entirely, OR do one guaranteed final check right as the active-polling window ends before deciding what to show.
+- A manual page refresh should never be the only way to see a successful payment reflected — if that's ever true, something in the polling logic gave up too early.
+
+---
+
+## 7. Quick reference — where each thing comes from
 
 | You want | Call |
 |---|---|
@@ -482,3 +536,4 @@ POST /events/evt_123/pending/pc_ext_2/reject     → { id, status: "REJECTED" }
 | Budget coverage/funding status | `GET /events/:id/report` (or AI `get_budget`) |
 | Import a budget doc/photo | `POST /files` → `POST /documents` → poll → `GET /pending` → confirm |
 | Confirm/reject any staged write | `GET/POST /events/:id/pending[/:id/confirm|reject]` |
+| Buy a plan (event pack / subscription) | `POST /events/:id/billing/purchase` or `POST /billing/subscribe` → poll `GET /events/:id/billing/entitlement` (§6) |

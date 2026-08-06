@@ -298,7 +298,7 @@ Invite roles (`EventRole`): `OWNER` (never invitable), `CO_OWNER`, `COORDINATOR`
 `GET /events/:id/sms/preview` (recipients + affordability) · `POST /sms/reminders` · `POST /sms/announcement` · `GET /sms/campaigns` · `GET /sms/delivery`. Delivery states: `queued/sent/delivered/failed/unknown` — never claim "delivered" beyond what `/delivery` reports.
 
 **Billing**
-`GET /billing/events/:id/entitlement` · `POST /billing/events/:id/purchase` · `POST /billing/subscribe` · `POST /billing/webhook/muda` (server-to-server; not a frontend call). Payments are **collections-only** Mobile Money via Muda; the webhook is the source of truth for grants. Wire the **Upgrade** CTAs from §7 to `purchase`/`subscribe`.
+`GET /billing/events/:id/entitlement` · `POST /billing/events/:id/purchase` · `POST /billing/subscribe` · `POST /billing/webhook/muda` (server-to-server; not a frontend call). Payments are **collections-only** Mobile Money via Muda; the webhook is the source of truth for grants. Wire the **Upgrade** CTAs from §7 to `purchase`/`subscribe`. **Read [FRONTEND_PAYLOAD_EXAMPLES.md](FRONTEND_PAYLOAD_EXAMPLES.md) §6 before building the post-purchase polling UI** — a real incident traced back to the poll giving up before an already-successful payment was reflected, forcing a manual refresh; it has the actual measured timing and the do/don't list.
 
 ---
 

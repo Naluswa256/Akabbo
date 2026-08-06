@@ -5,6 +5,7 @@ import {
   Headers,
   HttpCode,
   Inject,
+  Logger,
   Param,
   Post,
   Req,
@@ -32,6 +33,8 @@ interface RawBodyRequest extends Request {
  */
 @Controller('billing')
 export class BillingController {
+  private readonly logger = new Logger(BillingController.name);
+
   constructor(
     private readonly billing: BillingService,
     @Inject(PAYMENT_PROVIDER) private readonly payments: PaymentProvider,
@@ -85,9 +88,17 @@ export class BillingController {
   ): Promise<{ ok: boolean }> {
     const raw = req.rawBody ?? Buffer.from(JSON.stringify(req.body ?? {}));
     const event = this.payments.verifyAndParseWebhook(raw, signature ?? '');
-    if (event) {
-      await this.billing.applyPaymentWebhook(event).catch(() => {});
+    if (!event) {
+      this.logger.warn('Muda webhook payload could not be parsed (unrecognized shape)');
+      return { ok: true };
     }
+    // Confirmed real bug: this previously discarded the error with zero
+    // logging — a genuine failure here (bad plan lookup, DB error) was
+    // completely invisible, indistinguishable from "nothing happened".
+    await this.billing.applyPaymentWebhook(event).catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.error(`applyPaymentWebhook failed for ref=${event.reference}: ${msg}`);
+    });
     return { ok: true };
   }
 }

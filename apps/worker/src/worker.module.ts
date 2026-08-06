@@ -7,6 +7,7 @@ import { AccessModule } from '@akabbo/access';
 import { IdentityModule } from '@akabbo/identity';
 import { LedgerModule } from '@akabbo/ledger';
 import { AiModule } from '@akabbo/ai';
+import { BillingModule } from '@akabbo/billing';
 import { DocumentsModule } from '@akabbo/documents';
 import { CommsModule } from '@akabbo/comms';
 import { buildLoggerParams } from '@akabbo/logging';
@@ -14,6 +15,7 @@ import { HeartbeatService } from './heartbeat.service';
 import { DrainSchedulerService } from './drain-scheduler.service';
 import { OutboxHandlersRegistrar } from './outbox-handlers.registrar';
 import { LearningSchedulerService } from './learning-scheduler.service';
+import { StuckPaymentAlertSchedulerService } from './stuck-payment-alert-scheduler.service';
 
 /**
  * Worker composition root. Same codebase and foundations as the API, a separate
@@ -39,6 +41,7 @@ import { LearningSchedulerService } from './learning-scheduler.service';
     IdentityModule,
     LedgerModule,
     AiModule,
+    BillingModule,
     DocumentsModule,
     CommsModule,
   ],
@@ -47,6 +50,7 @@ import { LearningSchedulerService } from './learning-scheduler.service';
     DrainSchedulerService,
     OutboxHandlersRegistrar,
     LearningSchedulerService,
+    StuckPaymentAlertSchedulerService,
   ],
 })
 export class WorkerModule {}

@@ -143,8 +143,11 @@ export class MudaTechProvider implements PaymentProvider {
     const raw_status = ((data as { status?: string }).status ?? parsed.status ?? '')
       .toString()
       .toUpperCase();
+    // Substring match, not exact — confirmed real bug: Muda's dashboard wording
+    // is "SUCCESSFUL", which an exact match against "SUCCESS" silently missed,
+    // marking a genuinely successful payment FAILED with no error anywhere.
     const status: PaymentWebhookEvent['status'] =
-      raw_status === 'SUCCESS' || raw_status === '200' || raw_status === 'COMPLETED'
+      raw_status.includes('SUCCESS') || raw_status === '200' || raw_status.includes('COMPLETE')
         ? 'succeeded'
         : 'failed';
     return { gatewayTransactionId, reference, status, amount: 0, currency: 'UGX' };

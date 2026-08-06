@@ -1130,6 +1130,11 @@ model Invoice {
   /// The gateway's transaction id; unique so a duplicate webhook can't
   /// double-apply a grant (metering doc §7.4).
   gatewayTransactionId String?       @unique @map("gateway_transaction_id")
+  /// Set once a stuck-payment alert email has gone out for this invoice, so
+  /// the scheduler never re-alerts on the same one. Cleared implicitly by
+  /// staying null — resolving the invoice (paid/failed) is what stops it
+  /// being picked up again, not this field.
+  stuckAlertSentAt     DateTime?     @map("stuck_alert_sent_at")
   createdAt            DateTime      @default(now()) @map("created_at")
   updatedAt            DateTime      @updatedAt @map("updated_at")
 
@@ -1137,6 +1142,7 @@ model Invoice {
   plan    Plan?          @relation(fields: [planId], references: [id])
 
   @@index([billingAccountId])
+  @@index([status, createdAt])
   @@map("invoice")
 }
 

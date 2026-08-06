@@ -50,21 +50,15 @@ spec:
             - name: PUBLIC_APP_URL
               value: https://linktrust.app
             - name: EMAIL_PROVIDER
-              value: twilio
+              value: sendgrid
             # --- UGSMS (SMS) ---
             - name: UGSMS_BASE_URL
               value: https://ugsms.com/api/v2
             - name: UGSMS_SENDER_ID
               value: AKABBO
-            # --- Twilio (Email) ---
-            # EMAIL_FROM_ADDRESS is deliberately NOT set here: the custom
-            # domain (noreply@em9096.linktrust.app) is DNS-authenticated but
-            # Twilio still rejects it as a sender (confirmed via direct API
-            # testing, 2026-08-03). Left unset, buildEmailProvider derives a
-            # working temporary sender from TWILIO_ACCOUNT_SID at runtime
-            # (see providers.module.ts) — set this explicitly once Twilio
-            # accepts the custom domain (check the Email > Domains console
-            # page) to switch back to noreply@em9096.linktrust.app.
+            # --- SendGrid (Email) ---
+            - name: EMAIL_FROM_ADDRESS
+              value: noreply@linktrust.app
             # --- Secrets from Secret Manager ---
             - name: DATABASE_URL
               valueFrom:
@@ -91,15 +85,10 @@ spec:
                 secretKeyRef:
                   name: akabbo-tavily-api-key
                   key: latest
-            - name: TWILIO_ACCOUNT_SID
+            - name: SENDGRID_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: akabbo-twilio-account-sid
-                  key: latest
-            - name: TWILIO_AUTH_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: akabbo-twilio-auth-token
+                  name: akabbo-sendgrid-api-key
                   key: latest
             - name: MUDA_CLIENT_ID
               valueFrom:

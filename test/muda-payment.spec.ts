@@ -35,6 +35,16 @@ describe('MudaTechProvider (collections-only)', () => {
     });
   });
 
+  it('maps Muda\'s own "SUCCESSFUL" wording to succeeded (real bug: exact match on "SUCCESS" missed it)', () => {
+    // Confirmed against a real incident: a payment Muda's own dashboard
+    // showed as successful was silently marked FAILED in Akabbo because the
+    // old exact-match check never recognized "SUCCESSFUL", only "SUCCESS".
+    const body = JSON.stringify({
+      data: { trans_id: 'muda_tx_10', reference_id: 'inv_def', status: 'SUCCESSFUL' },
+    });
+    expect(provider.verifyAndParseWebhook(body, sign(body))?.status).toBe('succeeded');
+  });
+
   it('maps a FAILED status to a failed event', () => {
     const body = JSON.stringify({
       data: { trans_id: 't', reference_id: 'inv_x', status: 'FAILED' },

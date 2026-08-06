@@ -117,6 +117,12 @@ export const envSchema = z
     TWILIO_ACCOUNT_SID: z.string().optional().default(''),
     TWILIO_AUTH_TOKEN: z.string().optional().default(''),
     EMAIL_FROM_ADDRESS: z.string().default(''),
+    // Stuck-payment alerting (worker scheduler): a PENDING invoice older than
+    // this with no webhook resolution gets one alert email, then is marked so
+    // it isn't re-alerted. Empty ADMIN_ALERT_EMAIL disables alerting entirely
+    // (fail-safe default — no admin inbox configured, no email attempted).
+    ADMIN_ALERT_EMAIL: z.string().default(''),
+    STUCK_INVOICE_THRESHOLD_MINUTES: z.coerce.number().int().positive().default(20),
     // SendGrid Mail Send v3 API key (EMAIL_PROVIDER=sendgrid).
     // Created in SendGrid Console → Settings → API Keys.
     SENDGRID_API_KEY: z.string().optional().default(''),

@@ -1,4 +1,4 @@
-# AKABBO — Admin Panel: Users/Plans + Conversation Inbox + Budget Knowledge
+# AKABBO — Admin Panel: Users/Plans + Conversation Inbox + Budget Knowledge + Payments
 
 This is a **founder-only** surface, not a feature for regular app users. There is no admin *role* in this system yet — it's gated by a **shared secret header**, the same mechanism already used for `/ai/learning/*`. This panel should live in a separate, non-public part of the frontend (not reachable from the normal organizer UI), and the secret should be entered once and stored locally (e.g. a simple password-gate screen), never bundled into the public app.
 
@@ -206,9 +206,66 @@ Returns the source (same fields as one row above) plus an `observations` array �
 
 ---
 
-## 4. What Users/Plans + Conversation Inbox do NOT do
+## 4. Payments — see and manually reconcile stuck invoices
 
-- **No write actions** — this is read-only reporting. Changing a user's plan, banning someone, editing a conversation — none of that exists here.
+Context: the system is purely webhook-driven — Muda calls back on success/failure, and that's the only path that normally grants a plan/credits. This section is the fallback for when that doesn't happen: Muda shows a collection as successful on their own dashboard, but our webhook never applied it (lost callback, or a bug in how we read Muda's payload — one exactly like this was found and fixed the same day this section was added: a status-string mismatch silently marked a real success as failed).
+
+### List invoices
+
+```
+GET /admin/invoices?status=PENDING
+x-akabbo-admin-secret: <secret>
+```
+
+`status` is optional (`PENDING | PAID | FAILED | CANCELLED`) — omit for everything, newest first, capped at 200.
+
+```json
+[
+  {
+    "id": "25ff3659-...",
+    "billingAccountId": "edb47ef4-...",
+    "planId": "4228f2b8-...",
+    "eventId": "4f2ed4cb-...",
+    "amountMinor": "30000",
+    "currency": "UGX",
+    "status": "PENDING",
+    "reference": "inv_648cadb50960efabf5d562a7",
+    "gatewayTransactionId": null,
+    "createdAt": "2026-08-06T08:27:01.146Z",
+    "updatedAt": "2026-08-06T08:27:01.146Z"
+  }
+]
+```
+
+`amountMinor` is a string, same money convention as everywhere else in the app.
+
+### Manually reconcile one
+
+Only after confirming directly on the Muda dashboard that the collection actually succeeded:
+
+```
+POST /admin/invoices/:id/reconcile
+x-akabbo-admin-secret: <secret>
+Content-Type: application/json
+
+{ "gatewayTransactionId": "<the transaction id Muda's dashboard shows>" }
+```
+
+```json
+{ "applied": true }
+```
+
+This runs through the **exact same grant logic** a real webhook does (idempotent, plan-driven) — not a shortcut that just flips a status column. `applied: false` (or a `400`) means it was already paid or something else stopped it; check the invoice's current `status` via the list endpoint. Rejects with `400` if the invoice is already `PAID`.
+
+### Stuck-payment email alerts (automatic, no endpoint)
+
+A background job checks every 5 minutes for invoices `PENDING` for more than `STUCK_INVOICE_THRESHOLD_MINUTES` (20 by default) with no resolution, and emails the admin inbox once per invoice — listing the reference, amount, and how long it's been stuck, with the exact `reconcile` call to run once confirmed on Muda. It never re-alerts on the same invoice while it stays `PENDING`. Nothing for the panel to build here — mentioned so you know why an admin might already be acting on something before checking this screen.
+
+---
+
+## 5. What Users/Plans + Conversation Inbox do NOT do
+
+- **No write actions** (except the invoice reconcile above) — everything else here is read-only reporting. Changing a user's plan, banning someone, editing a conversation — none of that exists.
 - **No search/filter server-side** on users or conversations (by phone, by plan, by date range) — filter/sort client-side on the returned list for now.
 - **No pagination on `/admin/users`** (flat 200-row cap) — fine short-term.
 - **This is the same secret as `/ai/learning/*` and the budget-knowledge endpoints above** — one screen/auth gate covers all of it, no separate logins needed.

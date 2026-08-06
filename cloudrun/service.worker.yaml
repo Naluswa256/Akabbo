@@ -50,14 +50,20 @@ spec:
             - name: PUBLIC_APP_URL
               value: https://linktrust.app
             - name: EMAIL_PROVIDER
-              value: twilio
+              value: sendgrid
             # --- UGSMS (SMS) ---
             - name: UGSMS_BASE_URL
               value: https://ugsms.com/api/v2
             - name: UGSMS_SENDER_ID
               value: AKABBO
-            # --- Twilio (Email) ---
-            # EMAIL_FROM_ADDRESS deliberately unset — see cloudrun/service.api.yaml.
+            # --- SendGrid (Email) ---
+            - name: EMAIL_FROM_ADDRESS
+              value: noreply@linktrust.app
+            # --- Stuck-payment alerting (worker scheduler) ---
+            - name: ADMIN_ALERT_EMAIL
+              value: williamnaluswa@gmail.com
+            - name: STUCK_INVOICE_THRESHOLD_MINUTES
+              value: '20'
             # --- Secrets from Secret Manager ---
             - name: DATABASE_URL
               valueFrom:
@@ -84,15 +90,10 @@ spec:
                 secretKeyRef:
                   name: akabbo-tavily-api-key
                   key: latest
-            - name: TWILIO_ACCOUNT_SID
+            - name: SENDGRID_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: akabbo-twilio-account-sid
-                  key: latest
-            - name: TWILIO_AUTH_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: akabbo-twilio-auth-token
+                  name: akabbo-sendgrid-api-key
                   key: latest
             - name: MUDA_CLIENT_ID
               valueFrom:

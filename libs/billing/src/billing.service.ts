@@ -318,6 +318,96 @@ export class BillingService implements OnModuleInit {
     return { applied: true };
   }
 
+  // ── Admin reconciliation + stuck-payment alerting ─────────────────────────────
+
+  /** Every invoice, newest first, optionally filtered by status (admin surface). */
+  async listInvoices(status?: InvoiceStatus): Promise<InvoiceRow[]> {
+    return this.prisma.invoice.findMany({
+      where: status ? { status } : undefined,
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+      select: {
+        id: true,
+        billingAccountId: true,
+        planId: true,
+        eventId: true,
+        amountMinor: true,
+        currency: true,
+        status: true,
+        reference: true,
+        gatewayTransactionId: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+  }
+
+  /**
+   * Manually apply a payment an admin has confirmed directly on the Muda
+   * dashboard (e.g. the webhook never arrived, or was misread — see the
+   * status-string bug fixed alongside this). Reuses applyPaymentWebhook
+   * verbatim so a manually-reconciled invoice goes through the exact same
+   * grant logic, idempotency included, as a real webhook — this is
+   * deliberately NOT a separate "just set status=PAID" shortcut.
+   */
+  async reconcileInvoice(
+    invoiceId: string,
+    gatewayTransactionId: string,
+  ): Promise<{ applied: boolean }> {
+    const invoice = await this.prisma.invoice.findUnique({
+      where: { id: invoiceId },
+      select: { reference: true, amountMinor: true, currency: true, status: true },
+    });
+    if (!invoice) throw new BadRequestException('Invoice not found');
+    if (invoice.status === InvoiceStatus.PAID) {
+      throw new BadRequestException('Invoice is already marked PAID');
+    }
+    return this.applyPaymentWebhook({
+      reference: invoice.reference,
+      gatewayTransactionId,
+      status: 'succeeded',
+      amount: Number(invoice.amountMinor),
+      currency: invoice.currency,
+    });
+  }
+
+  /**
+   * Invoices stuck PENDING past the threshold with no alert sent yet — the
+   * worker scheduler emails these to the admin inbox once, then marks them
+   * so the same invoice never alerts twice while still PENDING.
+   */
+  async findStuckPendingInvoices(thresholdMinutes: number): Promise<InvoiceRow[]> {
+    return this.prisma.invoice.findMany({
+      where: {
+        status: InvoiceStatus.PENDING,
+        stuckAlertSentAt: null,
+        createdAt: { lt: new Date(Date.now() - thresholdMinutes * 60 * 1000) },
+      },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        id: true,
+        billingAccountId: true,
+        planId: true,
+        eventId: true,
+        amountMinor: true,
+        currency: true,
+        status: true,
+        reference: true,
+        gatewayTransactionId: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+  }
+
+  async markStuckAlertSent(invoiceIds: string[]): Promise<void> {
+    if (invoiceIds.length === 0) return;
+    await this.prisma.invoice.updateMany({
+      where: { id: { in: invoiceIds } },
+      data: { stuckAlertSentAt: new Date() },
+    });
+  }
+
   // ── SMS credit ledger (metering §6) — append-only ─────────────────────────────
 
   async grantCredits(
@@ -517,6 +607,20 @@ interface PlanRow {
   includedSmsCredits: number;
   includedAiCredits: number;
   isSubscription: boolean;
+}
+
+export interface InvoiceRow {
+  id: string;
+  billingAccountId: string;
+  planId: string | null;
+  eventId: string | null;
+  amountMinor: bigint;
+  currency: string;
+  status: InvoiceStatus;
+  reference: string;
+  gatewayTransactionId: string | null;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 function isUniqueViolation(err: unknown): boolean {

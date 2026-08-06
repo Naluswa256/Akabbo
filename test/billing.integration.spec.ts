@@ -182,6 +182,90 @@ describe('Billing & Entitlements (integration)', () => {
     expect(ent.smsBalance).toBe(1000);
   });
 
+  it('reconcileInvoice manually applies a payment an admin confirmed on Muda — same grant logic as the webhook', async () => {
+    const owner = await makeUser();
+    const event = await events.createEvent(owner, { name: 'Manual reconcile' });
+    const { invoiceId } = await billing.purchaseEventPack(
+      owner.userId,
+      event.id,
+      'STARTER',
+      '+256770000003',
+    );
+
+    const result = await billing.reconcileInvoice(invoiceId, 'gw_tx_manual_1');
+    expect(result.applied).toBe(true);
+
+    const invoice = await prisma.invoice.findUniqueOrThrow({ where: { id: invoiceId } });
+    expect(invoice.status).toBe('PAID');
+    expect(invoice.gatewayTransactionId).toBe('gw_tx_manual_1');
+    const ent = await entitlements.resolve({ eventId: event.id });
+    expect(ent.planCode).toBe('STARTER');
+    expect(ent.smsBalance).toBe(300);
+  });
+
+  it('reconcileInvoice rejects an already-PAID invoice and an unknown id', async () => {
+    const owner = await makeUser();
+    const event = await events.createEvent(owner, { name: 'Reconcile guards' });
+    const { invoiceId, reference } = await billing.purchaseEventPack(
+      owner.userId,
+      event.id,
+      'STARTER',
+      '+256770000004',
+    );
+    await billing.applyPaymentWebhook({
+      gatewayTransactionId: 'gw_tx_already_paid',
+      reference,
+      status: 'succeeded',
+      amount: 10000,
+      currency: 'UGX',
+    });
+
+    await expect(billing.reconcileInvoice(invoiceId, 'gw_tx_late')).rejects.toBeDefined();
+    await expect(
+      billing.reconcileInvoice('00000000-0000-0000-0000-000000000000', 'gw_tx_x'),
+    ).rejects.toBeDefined();
+  });
+
+  it('findStuckPendingInvoices finds only old, unresolved, unalerted PENDING invoices', async () => {
+    const owner = await makeUser();
+    const event = await events.createEvent(owner, { name: 'Stuck detection' });
+
+    const fresh = await billing.purchaseEventPack(
+      owner.userId,
+      event.id,
+      'STARTER',
+      '+256770000005',
+    );
+    const old = await billing.purchaseEventPack(owner.userId, event.id, 'STARTER', '+256770000006');
+    // Backdate the "old" one past the threshold — no sleeping in tests.
+    await prisma.invoice.update({
+      where: { id: old.invoiceId },
+      data: { createdAt: new Date(Date.now() - 30 * 60 * 1000) },
+    });
+
+    const stuckAt20Min = await billing.findStuckPendingInvoices(20);
+    expect(stuckAt20Min.map((i) => i.id)).toEqual([old.invoiceId]);
+    expect(stuckAt20Min.map((i) => i.id)).not.toContain(fresh.invoiceId);
+
+    // Once alerted, it's not picked up again while still PENDING.
+    await billing.markStuckAlertSent([old.invoiceId]);
+    expect(await billing.findStuckPendingInvoices(20)).toHaveLength(0);
+
+    // A PAID invoice is never "stuck", however old.
+    await billing.applyPaymentWebhook({
+      gatewayTransactionId: 'gw_tx_paid_old',
+      reference: fresh.reference,
+      status: 'succeeded',
+      amount: 10000,
+      currency: 'UGX',
+    });
+    await prisma.invoice.update({
+      where: { id: fresh.invoiceId },
+      data: { createdAt: new Date(Date.now() - 60 * 60 * 1000) },
+    });
+    expect(await billing.findStuckPendingInvoices(20)).toHaveLength(0);
+  });
+
   it('SMS credit ledger: reserve fails closed, refund restores, commit is neutral (§6)', async () => {
     const owner = await makeUser();
     const event = await events.createEvent(owner, { name: 'Ledger' });
